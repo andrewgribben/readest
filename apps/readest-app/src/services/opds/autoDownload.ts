@@ -1,7 +1,9 @@
 import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
 import type { OPDSCatalog } from '@/types/opds';
+import type { BookOrbitSettings } from '@/types/settings';
 import { resolveURL } from '@/app/opds/utils/opdsUtils';
+import { ensureOpdsAudiobookStub } from './audiobookStub';
 import { applyOPDSCover } from './cover';
 import { applyOPDSMetadata } from './metadata';
 import { checkFeedForNewItems } from './feedChecker';
@@ -18,7 +20,13 @@ import {
   MAX_RETRY_ATTEMPTS,
   PERSIST_BATCH_SIZE,
 } from './types';
-import type { PendingItem, SyncResult, OPDSSubscriptionState, FailedEntry } from './types';
+import type {
+  PendingAudioItem,
+  PendingItem,
+  SyncResult,
+  OPDSSubscriptionState,
+  FailedEntry,
+} from './types';
 import { runWithConcurrency } from '@/utils/concurrency';
 
 /**
@@ -101,6 +109,38 @@ async function downloadAndImport(
   return book;
 }
 
+/** Materialize a streaming audiobook stub (no file download). */
+async function stubAudiobook(
+  item: PendingAudioItem,
+  catalog: OPDSCatalog,
+  appService: AppService,
+  books: Book[],
+  bookorbit?: Pick<BookOrbitSettings, 'serverUrl' | 'password'>,
+): Promise<Book> {
+  const tracks = item.tracks.map((track) => ({
+    ...track,
+    href: resolveURL(track.href, item.baseURL),
+  }));
+  const { book, created } = await ensureOpdsAudiobookStub({
+    appService,
+    library: books,
+    catalogId: catalog.contentId || catalog.id,
+    title: item.title,
+    author: item.author,
+    tracks,
+    coverUrl: item.coverHref ? resolveURL(item.coverHref, item.baseURL) : undefined,
+    catalog,
+    bookorbit,
+  });
+  if (created) {
+    books.unshift(book);
+    console.log(`[OPDS] stubbed audiobook "${item.title}"`);
+  } else {
+    console.log(`[OPDS] audiobook "${item.title}" already in library — skipping`);
+  }
+  return book;
+}
+
 /**
  * Sync a single catalog: discover new items, retry failed, download, update state.
  *
@@ -115,11 +155,14 @@ async function syncCatalog(
   appService: AppService,
   books: Book[],
   onBooksImported?: (newBooks: Book[]) => Promise<void>,
+  bookorbit?: Pick<BookOrbitSettings, 'serverUrl' | 'password'>,
 ): Promise<{ newBooks: Book[]; state: OPDSSubscriptionState; error?: unknown }> {
   const state = await loadSubscriptionState(appService, catalog.id);
 
-  // Discovery: find new items from feeds
-  const pendingItems = await checkFeedForNewItems(catalog, state);
+  // Discovery: ebooks to download and audiobooks to stub (never import audio).
+  const discovery = await checkFeedForNewItems(catalog, state);
+  const pendingItems = discovery.ebooks;
+  const pendingAudio = discovery.audiobooks.filter((item) => !inBackoff(state, item.entryId));
 
   // Failed entries still in their backoff window must not be re-attempted
   // until they become retry-eligible. They naturally reappear in
@@ -151,33 +194,64 @@ async function syncCatalog(
     seenIds.add(item.entryId);
     allItems.push(item);
   }
-  if (allItems.length === 0) {
+
+  const newBooks: Book[] = [];
+  const updatedFailedEntries: FailedEntry[] = [
+    ...state.failedEntries.filter((fe) => !isRetryEligible(fe)),
+  ];
+  const priorAttempts = new Map(state.failedEntries.map((fe) => [fe.entryId, fe.attempts]));
+
+  if (allItems.length === 0 && pendingAudio.length === 0) {
     state.lastCheckedAt = Date.now();
     await saveSubscriptionState(appService, state);
     return { newBooks: [], state };
   }
 
-  // Acquisition: download with bounded concurrency, in batches.
-  //
-  // Progress is persisted after every batch rather than once at the end. A
-  // first sync of a large catalog runs for minutes and is a prime target for
-  // Android's low-memory killer; with a single end-of-run write, a kill at
-  // item N discarded all N imports and the next run restarted from zero, so
-  // the sync could never converge however often it was retried. Batching
-  // bounds that loss to one batch and lets successive runs make progress.
-  const newBooks: Book[] = [];
-  const updatedFailedEntries: FailedEntry[] = [
-    // Keep non-retry-eligible failures as-is
-    ...state.failedEntries.filter((fe) => !isRetryEligible(fe)),
-  ];
-  // Attempt counts have to come from the state as it was loaded. Every batch
-  // below reassigns `state.failedEntries`, and that array has already dropped
-  // the retry-eligible originals — looking an entry up there from a later
-  // batch would find nothing, reset its counter to 1, and retry it forever
-  // instead of giving up at MAX_RETRY_ATTEMPTS.
-  const priorAttempts = new Map(state.failedEntries.map((fe) => [fe.entryId, fe.attempts]));
-
   try {
+    // Audiobook stubs first: no network download of media, just library rows
+    // so they show on the Audiobooks shelf like ABS sync.
+    if (pendingAudio.length > 0) {
+      const audioBooks: Book[] = [];
+      const audioKnownIds: string[] = [];
+      for (const item of pendingAudio) {
+        try {
+          const book = await stubAudiobook(item, catalog, appService, books, bookorbit);
+          audioBooks.push(book);
+          audioKnownIds.push(item.entryId);
+        } catch (error) {
+          console.error(`[OPDS] failed to stub audiobook "${item.title}":`, error);
+          const attempts = (priorAttempts.get(item.entryId) ?? 0) + 1;
+          if (attempts >= MAX_RETRY_ATTEMPTS) {
+            audioKnownIds.push(item.entryId);
+          } else {
+            updatedFailedEntries.push({
+              entryId: item.entryId,
+              href: item.tracks[0]?.href ?? catalog.url,
+              title: item.title,
+              attempts,
+              lastAttemptAt: Date.now(),
+            });
+          }
+        }
+      }
+      if (audioBooks.length > 0) {
+        await onBooksImported?.(audioBooks);
+        newBooks.push(...audioBooks);
+      }
+      state.knownEntryIds = pruneKnownEntryIds([...state.knownEntryIds, ...audioKnownIds]);
+      state.failedEntries = updatedFailedEntries;
+      state.lastCheckedAt = Date.now();
+      await saveSubscriptionState(appService, state);
+    }
+
+    // Acquisition: download ebooks with bounded concurrency, in batches.
+    //
+    // Progress is persisted after every batch rather than once at the end. A
+    // first sync of a large catalog runs for minutes and is a prime target for
+    // Android's low-memory killer; with a single end-of-run write, a kill at
+    // item N discarded all N imports and the next run restarted from zero, so
+    // the sync could never converge however often it was retried. Batching
+    // bounds that loss to one batch and lets successive runs make progress.
     for (let offset = 0; offset < allItems.length; offset += PERSIST_BATCH_SIZE) {
       const batch = allItems.slice(offset, offset + PERSIST_BATCH_SIZE);
       const downloadResults = await runWithConcurrency(batch, DOWNLOAD_CONCURRENCY, (item) =>
@@ -235,6 +309,10 @@ async function syncCatalog(
   return { newBooks, state };
 }
 
+function inBackoff(state: OPDSSubscriptionState, entryId: string): boolean {
+  return state.failedEntries.some((fe) => fe.entryId === entryId && !isRetryEligible(fe));
+}
+
 /**
  * Sync all OPDS catalogs that have autoDownload enabled.
  *
@@ -249,6 +327,7 @@ export async function syncSubscribedCatalogs(
   appService: AppService,
   books: Book[],
   onBooksImported?: (newBooks: Book[]) => Promise<void>,
+  bookorbit?: Pick<BookOrbitSettings, 'serverUrl' | 'password'>,
 ): Promise<SyncResult> {
   const eligible = catalogs.filter((c) => c.autoDownload && !c.disabled);
   if (eligible.length === 0) {
@@ -260,7 +339,13 @@ export async function syncSubscribedCatalogs(
 
   for (const catalog of eligible) {
     try {
-      const { newBooks, error } = await syncCatalog(catalog, appService, books, onBooksImported);
+      const { newBooks, error } = await syncCatalog(
+        catalog,
+        appService,
+        books,
+        onBooksImported,
+        bookorbit,
+      );
       // Take the books committed before the failure, then let the existing
       // error path run — those batches are already on disk and marked known.
       allNewBooks.push(...newBooks);
