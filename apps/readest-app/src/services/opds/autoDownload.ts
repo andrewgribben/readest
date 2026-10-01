@@ -1,12 +1,7 @@
 import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
 import type { OPDSCatalog } from '@/types/opds';
-import { downloadFile } from '@/libs/storage';
-import { getFileExtFromMimeType } from '@/libs/document';
-import { needsProxy, getProxiedURL, probeAuth, probeFilename } from '@/app/opds/utils/opdsReq';
-import { resolveURL, parseMediaType, getFileExtFromPath } from '@/app/opds/utils/opdsUtils';
-import { normalizeCustomHeaders } from '@/utils/customHeaders';
-import { READEST_OPDS_USER_AGENT } from '@/services/constants';
+import { resolveURL } from '@/app/opds/utils/opdsUtils';
 import { applyOPDSCover } from './cover';
 import { applyOPDSMetadata } from './metadata';
 import { checkFeedForNewItems } from './feedChecker';
@@ -16,6 +11,7 @@ import {
   pruneKnownEntryIds,
 } from './subscriptionState';
 import { findBookByOPDSSources, upsertOPDSSourceMapping } from './sourceMap';
+import { downloadAcquisitionFile } from './acquisitionDownload';
 import {
   isRetryEligible,
   DOWNLOAD_CONCURRENCY,
@@ -24,7 +20,6 @@ import {
 } from './types';
 import type { PendingItem, SyncResult, OPDSSubscriptionState, FailedEntry } from './types';
 import { runWithConcurrency } from '@/utils/concurrency';
-import { uniqueId } from '@/utils/misc';
 
 /**
  * Download a single item and import it into the library.
@@ -62,67 +57,12 @@ async function downloadAndImport(
     console.log(`[OPDS] "${item.title}" already imported for this source — skipping re-download`);
     return existing;
   }
-  const username = catalog.username ?? '';
-  const password = catalog.password ?? '';
-  const customHeaders = normalizeCustomHeaders(catalog.customHeaders);
-  const useProxy = needsProxy(url);
 
-  let downloadUrl = useProxy ? getProxiedURL(url, '', true, customHeaders) : url;
-  const headers: Record<string, string> = {
-    'User-Agent': READEST_OPDS_USER_AGENT,
-    Accept: '*/*',
-    ...(!useProxy ? customHeaders : {}),
-  };
-
-  if (username || password) {
-    const authHeader = await probeAuth(url, username, password, useProxy, customHeaders);
-    if (authHeader) {
-      if (!useProxy) {
-        headers['Authorization'] = authHeader;
-      }
-      downloadUrl = useProxy ? getProxiedURL(url, authHeader, true, customHeaders) : url;
-    }
-  }
-
-  const parsed = parseMediaType(item.mimeType);
-  const rawPathname = new URL(url).pathname;
-  let pathname: string;
-  try {
-    pathname = decodeURIComponent(rawPathname);
-  } catch {
-    pathname = rawPathname;
-  }
-  const ext = getFileExtFromMimeType(parsed?.mediaType) || getFileExtFromPath(pathname);
-  // Use the last non-empty path segment as the base; falling back to the
-  // entry id avoids producing 200+ char filenames from deep URLs and keeps
-  // us comfortably under the ~255-byte filesystem limit.
-  const basename = uniqueId();
-  const filename = ext ? `${basename}.${ext}` : basename;
-  let dstFilePath = await appService.resolveFilePath(filename, 'Cache');
-
-  console.log(`[OPDS] downloading "${item.title}" from ${url}`);
-  const responseHeaders = await downloadFile({
+  const { filePath: dstFilePath, fingerprint } = await downloadAcquisitionFile(
     appService,
-    dst: dstFilePath,
-    cfp: '',
-    url: downloadUrl,
-    headers,
-    singleThreaded: true,
-    // Same self-signed/private-CA workaround as the manual download path
-    // (#2871): the native downloader's rustls validation ignores the OS
-    // trust store, so without this flag auto-download fails the TLS
-    // handshake on servers where feed browsing and manual download work
-    // (#4988).
-    skipSslVerification: true,
-  });
-
-  const probedFilename = await probeFilename(responseHeaders);
-  if (probedFilename) {
-    const newFilePath = await appService.resolveFilePath(probedFilename, 'Cache');
-    await appService.copyFile(dstFilePath, 'None', newFilePath, 'None');
-    await appService.deleteFile(dstFilePath, 'None');
-    dstFilePath = newFilePath;
-  }
+    catalog,
+    item,
+  );
 
   const book = await appService.importBook(dstFilePath, books);
   if (!book) throw new Error(`importBook returned null for ${item.title}`);
@@ -139,9 +79,9 @@ async function downloadAndImport(
         appService,
         book,
         coverUrl: resolveURL(item.coverHref, item.baseURL),
-        username,
-        password,
-        customHeaders,
+        username: catalog.username ?? '',
+        password: catalog.password ?? '',
+        customHeaders: catalog.customHeaders,
       });
     } catch (error) {
       console.warn(`[OPDS] failed to apply the feed cover for "${item.title}":`, error);
@@ -152,6 +92,7 @@ async function downloadAndImport(
       catalogId: catalog.contentId || catalog.id,
       sourceUrl: url,
       bookHash: book.hash,
+      fingerprint,
     });
   } catch (error) {
     console.error('OPDS sync: failed to update source map:', error);

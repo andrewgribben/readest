@@ -25,6 +25,14 @@ const migrations: Record<SchemaType, MigrationEntry[]> = {
         );
       `,
     },
+    {
+      name: '2026100101_opds_source_fingerprints',
+      sql: `
+        ALTER TABLE opds_source_mappings ADD COLUMN etag TEXT;
+        ALTER TABLE opds_source_mappings ADD COLUMN last_modified TEXT;
+        ALTER TABLE opds_source_mappings ADD COLUMN content_length INTEGER;
+      `,
+    },
   ],
   'bookorbit-sync': [
     {
