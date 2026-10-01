@@ -336,6 +336,8 @@ export function getSubsectionURLs(feed: OPDSFeed, baseURL: string): string[] {
 interface CrawlContext {
   catalog: OPDSCatalog;
   knownIds: Set<string>;
+  /** Dedupes audio stubs within this crawl only — not subscription knownIds. */
+  seenAudioIds: Set<string>;
   username: string;
   password: string;
   customHeaders: Record<string, string>;
@@ -361,11 +363,13 @@ async function crawlFeeds(
 
   const processFeed = (feed: OPDSFeed, baseURL: string, depth: number, page: number) => {
     const newEbooks = collectNewEntries(feed, ctx.knownIds, baseURL);
-    const newAudio = collectNewAudioEntries(feed, ctx.knownIds, baseURL);
-    // Mark as known so a book listed by several crawled feeds is only
-    // collected once. Audio and ebook share the entry-id namespace.
+    // Audiobook stubs are cheap and idempotent. Do not honor knownEntryIds:
+    // a prior buggy sync may have permanently skipped an audio title after
+    // trying to importBook an MP3, leaving it in knownEntryIds with no library
+    // stub. Re-discover every crawl; ensureOpdsAudiobookStub no-ops if present.
+    const newAudio = collectNewAudioEntries(feed, ctx.seenAudioIds, baseURL);
     for (const item of newEbooks) ctx.knownIds.add(item.entryId);
-    for (const item of newAudio) ctx.knownIds.add(item.entryId);
+    for (const item of newAudio) ctx.seenAudioIds.add(item.entryId);
     ebooks.push(...newEbooks);
     audiobooks.push(...newAudio);
 
@@ -436,6 +440,7 @@ export async function checkFeedForNewItems(
   const ctx: CrawlContext = {
     catalog,
     knownIds,
+    seenAudioIds: new Set<string>(),
     username,
     password,
     customHeaders,

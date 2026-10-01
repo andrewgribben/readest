@@ -628,4 +628,56 @@ describe('OPDS auto-download orchestrator', () => {
     const savedState = vi.mocked(saveSubscriptionState).mock.calls[0]![1] as OPDSSubscriptionState;
     expect(savedState.knownEntryIds).toContain('urn:bookorbit:book:15959');
   });
+
+  it('heals prior permanent skips of audiobooks instead of retrying importBook', async () => {
+    // Older builds downloaded audio as ebooks, failed importBook, and marked
+    // the entry known. Retries must not call downloadFile again.
+    vi.mocked(loadSubscriptionState).mockResolvedValue({
+      catalogId: 'cat-1',
+      lastCheckedAt: 0,
+      knownEntryIds: ['urn:bookorbit:book:15959'],
+      failedEntries: [
+        {
+          entryId: 'urn:bookorbit:book:15959',
+          href: '/api/v1/opds/15959/download?fileId=714',
+          title: 'Warbreaker',
+          attempts: MAX_RETRY_ATTEMPTS - 1,
+          lastAttemptAt: 0,
+        },
+      ],
+    });
+    const catalogs: OPDSCatalog[] = [
+      { id: 'cat-1', name: 'Shelf', url: 'https://shelf.example.com/opds', autoDownload: true },
+    ];
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: [],
+      audiobooks: [
+        {
+          entryId: 'urn:bookorbit:book:15959',
+          title: 'Warbreaker',
+          author: 'Brandon Sanderson',
+          tracks: [
+            {
+              href: '/api/v1/opds/15959/download?fileId=714',
+              mimeType: 'audio/mpeg',
+              title: 'MP3',
+            },
+          ],
+          baseURL: 'https://shelf.example.com/opds',
+        },
+      ],
+    });
+
+    const result = await syncSubscribedCatalogs(catalogs, appService, []);
+
+    expect(result.totalNewBooks).toBe(1);
+    expect(result.newBooks[0]!.format).toBe('OPDSAUDIO');
+    expect(downloadFile).not.toHaveBeenCalled();
+    const savedState = vi
+      .mocked(saveSubscriptionState)
+      .mock.calls.at(-1)![1] as OPDSSubscriptionState;
+    expect(savedState.failedEntries.map((fe) => fe.entryId)).not.toContain(
+      'urn:bookorbit:book:15959',
+    );
+  });
 });
