@@ -50,7 +50,7 @@ interface BookDetailViewProps {
   onUpload?: () => void;
   onShare?: () => void;
   onExport?: () => void;
-  /** Download an Audiobookshelf book for offline use (#6256). */
+  /** Download a streaming audiobook (ABS / OPDS / BookOrbit) for offline use. */
   onDownloadOffline?: () => void;
   /** Set when the offline download needs an upgrade; shown as a badge. */
   offlinePremiumLabel?: string;
@@ -163,7 +163,7 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
                 <MdOutlineCloudUpload className='fill-base-content' />
               </button>
             )}
-            {onDownloadOffline && !book.absDownloadedAt && (
+            {onDownloadOffline && !book.absDownloadedAt && !book.opdsDownloadedAt && (
               <button
                 onClick={onDownloadOffline}
                 title={_('Download for Offline')}
@@ -212,7 +212,7 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
                     transient
                     label={_('Remove from Device Only')}
                     onClick={onDeleteLocalCopy}
-                    disabled={!book.downloadedAt && !book.absDownloadedAt}
+                    disabled={!book.downloadedAt && !book.absDownloadedAt && !book.opdsDownloadedAt}
                   />
                 </div>
               </Dropdown>

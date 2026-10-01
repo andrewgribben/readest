@@ -14,7 +14,7 @@ import { md5Fingerprint } from '@/utils/md5';
 import { stubTranslation as _ } from '@/utils/misc';
 import { SIZE_PER_LOC, SIZE_PER_TIME_UNIT } from '@/services/constants';
 import { isFeedBook } from '@/services/rss/feedBookUrl';
-import { isAbsOfflineCapable, isAudiobook } from '@/utils/audiobook';
+import { isAudiobook, isStreamingOfflineCapable } from '@/utils/audiobook';
 
 /** Valid sort types for the library */
 const VALID_SORT_TYPES: LibrarySortByType[] = Object.values(LibrarySortByType);
@@ -197,9 +197,9 @@ export const selectDownloadableBooks = (
 };
 
 /**
- * The Audiobookshelf audiobooks a bulk Download should keep on the device
- * (#6256): the expanded selection narrowed to the books the per-book
- * "Download for Offline" action applies to and that aren't offline yet.
+ * The streaming audiobooks a bulk Download should keep on the device (#6256):
+ * ABS / OPDS / BookOrbit books the per-book "Download for Offline" action
+ * applies to and that aren't offline yet.
  */
 export const selectAbsOfflineBooks = (
   ids: string[],
@@ -211,8 +211,9 @@ export const selectAbsOfflineBooks = (
     (book) =>
       hashes.has(book.hash) &&
       !book.deletedAt &&
-      isAbsOfflineCapable(book) &&
-      !book.absDownloadedAt,
+      isStreamingOfflineCapable(book) &&
+      !book.absDownloadedAt &&
+      !book.opdsDownloadedAt,
   );
 };
 
@@ -1123,10 +1124,10 @@ export const getBookContextMenuItemIds = (
     // LocalSend needs the file on this device; cloud-only books are excluded.
     if (opts?.localSend && (book.downloadedAt || book.filePath)) ids.push('sendNearby');
   }
-  // Keep an Audiobookshelf book's media on the device (#6256); needs a native
+  // Keep a streaming audiobook's media on the device (#6256); needs a native
   // filesystem, so the caller enables it on Tauri only.
-  if (opts?.absOffline && isAbsOfflineCapable(book)) {
-    ids.push(book.absDownloadedAt ? 'offlineRemove' : 'offlineDownload');
+  if (opts?.absOffline && isStreamingOfflineCapable(book)) {
+    ids.push(book.absDownloadedAt || book.opdsDownloadedAt ? 'offlineRemove' : 'offlineDownload');
   }
   ids.push('delete');
   return ids;

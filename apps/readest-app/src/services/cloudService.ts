@@ -18,7 +18,7 @@ import { ClosableFile } from '@/utils/file';
 import { ProgressHandler } from '@/utils/transfer';
 import { CLOUD_BOOKS_SUBDIR, CLOUD_REPLICAS_SUBDIR } from './constants';
 import { isBookFileContentSource, resolveBookContentSource } from './bookContent';
-import { getAbsOfflineDir } from '@/utils/audiobook';
+import { getAbsOfflineDir, getOpdsOfflineDir } from '@/utils/audiobook';
 
 export async function deleteBook(
   fs: FileSystem,
@@ -60,15 +60,22 @@ export async function deleteBook(
       }
     }
 
-    // An offline Audiobookshelf download keeps its tracks beside the book
-    // (#6256); purge already wiped the whole directory above.
+    // An offline streaming download keeps its tracks beside the book (#6256);
+    // purge already wiped the whole directory above.
     if (book.format === 'ABS' && deleteAction !== 'purge') {
       const offlineDir = getAbsOfflineDir(book.hash);
       if (await fs.exists(offlineDir, 'Books')) {
         await fs.removeDir(offlineDir, 'Books', true);
       }
     }
+    if ((book.format === 'OPDSAUDIO' || book.format === 'BOOKORBIT') && deleteAction !== 'purge') {
+      const offlineDir = getOpdsOfflineDir(book.hash);
+      if (await fs.exists(offlineDir, 'Books')) {
+        await fs.removeDir(offlineDir, 'Books', true);
+      }
+    }
     book.absDownloadedAt = null;
+    book.opdsDownloadedAt = null;
 
     if (deleteAction === 'both' && (await fs.exists(getCoverFilename(book), 'Books'))) {
       await fs.removeFile(getCoverFilename(book), 'Books');

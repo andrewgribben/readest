@@ -171,6 +171,9 @@ export interface Book {
   // (audio tracks, or an ebook-only item's file). Device-local like
   // `downloadedAt`: the files exist only here, so it never syncs.
   absDownloadedAt?: number | null;
+  // When this device finished downloading an OPDS / BookOrbit audiobook for
+  // offline use. Device-local like `absDownloadedAt`.
+  opdsDownloadedAt?: number | null;
 
   metadata?: BookMetadata;
   // Field-level LWW timestamp for the metadata group (title, author, tags,
