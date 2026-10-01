@@ -116,7 +116,7 @@ async function stubAudiobook(
   appService: AppService,
   books: Book[],
   bookorbit?: Pick<BookOrbitSettings, 'serverUrl' | 'password'>,
-): Promise<Book> {
+): Promise<{ book: Book; created: boolean }> {
   const tracks = item.tracks.map((track) => ({
     ...track,
     href: resolveURL(track.href, item.baseURL),
@@ -135,10 +135,8 @@ async function stubAudiobook(
   if (created) {
     books.unshift(book);
     console.log(`[OPDS] stubbed audiobook "${item.title}"`);
-  } else {
-    console.log(`[OPDS] audiobook "${item.title}" already in library — skipping`);
   }
-  return book;
+  return { book, created };
 }
 
 /**
@@ -162,7 +160,12 @@ async function syncCatalog(
   // Discovery: ebooks to download and audiobooks to stub (never import audio).
   const discovery = await checkFeedForNewItems(catalog, state);
   const pendingItems = discovery.ebooks;
-  const pendingAudio = discovery.audiobooks.filter((item) => !inBackoff(state, item.entryId));
+  const pendingAudio = discovery.audiobooks;
+  const audioEntryIds = new Set(pendingAudio.map((item) => item.entryId));
+
+  // Drop legacy ebook-import failures for titles that are actually audiobooks.
+  // Older builds retried those as importBook and permanently skipped them.
+  const ebookFailedEntries = state.failedEntries.filter((fe) => !audioEntryIds.has(fe.entryId));
 
   // Failed entries still in their backoff window must not be re-attempted
   // until they become retry-eligible. They naturally reappear in
@@ -171,12 +174,12 @@ async function syncCatalog(
   // same in-backoff entry and append a second copy to failedEntries —
   // surfacing as duplicate-key warnings in the failed-downloads dialog.
   const inBackoffIds = new Set(
-    state.failedEntries.filter((fe) => !isRetryEligible(fe)).map((fe) => fe.entryId),
+    ebookFailedEntries.filter((fe) => !isRetryEligible(fe)).map((fe) => fe.entryId),
   );
   const eligiblePendingItems = pendingItems.filter((p) => !inBackoffIds.has(p.entryId));
 
-  // Collect retry-eligible failed entries as PendingItems
-  const retryItems: PendingItem[] = state.failedEntries.filter(isRetryEligible).map((fe) => ({
+  // Collect retry-eligible failed entries as PendingItems (ebooks only).
+  const retryItems: PendingItem[] = ebookFailedEntries.filter(isRetryEligible).map((fe) => ({
     entryId: fe.entryId,
     title: fe.title,
     acquisitionHref: fe.href,
@@ -190,18 +193,19 @@ async function syncCatalog(
   const seenIds = new Set<string>();
   const allItems: PendingItem[] = [];
   for (const item of [...eligiblePendingItems, ...retryItems]) {
-    if (seenIds.has(item.entryId)) continue;
+    if (seenIds.has(item.entryId) || audioEntryIds.has(item.entryId)) continue;
     seenIds.add(item.entryId);
     allItems.push(item);
   }
 
   const newBooks: Book[] = [];
   const updatedFailedEntries: FailedEntry[] = [
-    ...state.failedEntries.filter((fe) => !isRetryEligible(fe)),
+    ...ebookFailedEntries.filter((fe) => !isRetryEligible(fe)),
   ];
-  const priorAttempts = new Map(state.failedEntries.map((fe) => [fe.entryId, fe.attempts]));
+  const priorAttempts = new Map(ebookFailedEntries.map((fe) => [fe.entryId, fe.attempts]));
 
   if (allItems.length === 0 && pendingAudio.length === 0) {
+    state.failedEntries = updatedFailedEntries;
     state.lastCheckedAt = Date.now();
     await saveSubscriptionState(appService, state);
     return { newBooks: [], state };
@@ -215,23 +219,17 @@ async function syncCatalog(
       const audioKnownIds: string[] = [];
       for (const item of pendingAudio) {
         try {
-          const book = await stubAudiobook(item, catalog, appService, books, bookorbit);
-          audioBooks.push(book);
+          const { book, created } = await stubAudiobook(
+            item,
+            catalog,
+            appService,
+            books,
+            bookorbit,
+          );
           audioKnownIds.push(item.entryId);
+          if (created) audioBooks.push(book);
         } catch (error) {
           console.error(`[OPDS] failed to stub audiobook "${item.title}":`, error);
-          const attempts = (priorAttempts.get(item.entryId) ?? 0) + 1;
-          if (attempts >= MAX_RETRY_ATTEMPTS) {
-            audioKnownIds.push(item.entryId);
-          } else {
-            updatedFailedEntries.push({
-              entryId: item.entryId,
-              href: item.tracks[0]?.href ?? catalog.url,
-              title: item.title,
-              attempts,
-              lastAttemptAt: Date.now(),
-            });
-          }
         }
       }
       if (audioBooks.length > 0) {
@@ -307,10 +305,6 @@ async function syncCatalog(
   }
 
   return { newBooks, state };
-}
-
-function inBackoff(state: OPDSSubscriptionState, entryId: string): boolean {
-  return state.failedEntries.some((fe) => fe.entryId === entryId && !isRetryEligible(fe));
 }
 
 /**
