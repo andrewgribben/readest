@@ -34,6 +34,7 @@ vi.mock('@/services/opds/feedChecker', () => ({
 vi.mock('@/services/opds/sourceMap', () => ({
   upsertOPDSSourceMapping: vi.fn().mockResolvedValue(undefined),
   findBookByOPDSSources: vi.fn().mockResolvedValue(null),
+  fingerprintFromHeaders: vi.fn().mockReturnValue({}),
 }));
 
 vi.mock('@/services/opds/cover', () => ({
@@ -143,6 +144,7 @@ describe('OPDS auto-download orchestrator', () => {
       catalogId: 'cat-1',
       sourceUrl: 'https://shelf.example.com/dl/1.epub',
       bookHash: 'abc123',
+      fingerprint: {},
     });
   });
 
