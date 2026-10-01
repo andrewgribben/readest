@@ -182,6 +182,11 @@ export class AudiobookController extends EventTarget implements PlaybackSource {
     return this.#clock.playbackRate;
   }
 
+  /** Global seconds the session was opened to resume from (before any seek). */
+  get initialStartAt(): number {
+    return this.#source.startAt;
+  }
+
   async start(): Promise<void> {
     if (this.#retryTimer) {
       clearTimeout(this.#retryTimer);

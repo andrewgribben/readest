@@ -1,7 +1,7 @@
 'use client';
 
 import clsx from 'clsx';
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 
 import type { Book } from '@/types/book';
@@ -14,6 +14,7 @@ import {
   openOpdsAudiobookSession,
 } from '@/services/opds/openOpdsAudiobook';
 import { openBookOrbitAudiobookSession } from '@/services/bookorbit/openBookOrbitAudiobook';
+import { evaluateAudiobookOpenSync } from '@/services/audiobook/pairedProgressSync';
 import { ttsSessionManager } from '@/services/tts/TTSSessionManager';
 import { useEnv } from '@/context/EnvContext';
 import { useAppRouter } from '@/hooks/useAppRouter';
@@ -24,10 +25,14 @@ import { useTheme } from '@/hooks/useTheme';
 import { useTranslation } from '@/hooks/useTranslation';
 import { eventDispatcher } from '@/utils/event';
 import { useLibraryStore } from '@/store/libraryStore';
+import { useSettingsStore } from '@/store/settingsStore';
 import { useThemeStore } from '@/store/themeStore';
 import { isAudiobook } from '@/utils/audiobook';
 import { getHorizontalInsetStyle } from '@/utils/insets';
 import { navigateToLibrary, navigateToReader } from '@/utils/nav';
+import PairedProgressSyncResolver, {
+  type PairedProgressSyncDetails,
+} from '@/components/PairedProgressSyncResolver';
 import { Toast } from '@/components/Toast';
 import Spinner from '@/components/Spinner';
 import PlayerView from './components/PlayerView';
@@ -38,6 +43,12 @@ type AudiobookSession = { bookKey: string; controller: AudiobookController };
 type OpenResult = { result: AudiobookSession | null };
 type EpisodesData = Awaited<ReturnType<typeof loadAbsEpisodes>>;
 type EpisodesResult = { result: EpisodesData };
+type SyncOfferView = {
+  hash: string;
+  localPreview: string;
+  peerPreview: string;
+  peerAudioSeconds: number;
+};
 
 const PlayerRoute = () => {
   const router = useAppRouter();
@@ -81,6 +92,13 @@ const PlayerRoute = () => {
   // controller actually reports the tapped episode - kept a full render
   // apart from `setSession` on purpose (see that effect's comment).
   const [pendingEpisodeId, setPendingEpisodeId] = useState<string | null>(null);
+  // Paired ebook ↔ audio position prompt, held until the user chooses so
+  // start() does not race the dialog.
+  const [pairedSyncDetails, setPairedSyncDetails] = useState<PairedProgressSyncDetails | null>(
+    null,
+  );
+  const pairedSyncApplySecRef = useRef<number | null>(null);
+  const pairedSyncControllerRef = useRef<AudiobookController | null>(null);
   // Caches the in-flight open by book hash rather than a bare boolean/ref
   // flag. React StrictMode's dev-only effect -> cleanup -> effect replay
   // keeps this ref alive across the cycle (unlike a real unmount), so a
@@ -94,6 +112,13 @@ const PlayerRoute = () => {
   const openingRef = useRef<{ hash: string; promise: Promise<OpenResult> } | null>(null);
   // Same StrictMode-safe caching, for the podcast episode-list fetch.
   const episodesRef = useRef<{ hash: string; promise: Promise<EpisodesResult> } | null>(null);
+  // Sync-check promise + pending offer refs survive StrictMode's remount so
+  // the dialog/start decision is computed once and re-applied on replay.
+  const syncEvalRef = useRef<{
+    hash: string;
+    promise: Promise<SyncOfferView | null>;
+  } | null>(null);
+  const pendingSyncOfferRef = useRef<SyncOfferView | null>(null);
 
   useEffect(() => {
     if (!libraryLoaded) return;
@@ -104,6 +129,13 @@ const PlayerRoute = () => {
     if (!resolvedBook) {
       navigateToLibrary(router);
       return;
+    }
+    if (syncEvalRef.current?.hash !== resolvedBook.hash) {
+      syncEvalRef.current = null;
+      pendingSyncOfferRef.current = null;
+      pairedSyncControllerRef.current = null;
+      pairedSyncApplySecRef.current = null;
+      setPairedSyncDetails(null);
     }
     if (!isAudiobook(resolvedBook)) {
       // A deep link must not reach the document loader with a streaming
@@ -232,9 +264,71 @@ const PlayerRoute = () => {
       // not a transient mid-playback value here), so this fires start()
       // exactly once, on first open, and never resumes audio the user has
       // since paused.
-      if (result.controller.state === 'stopped') {
-        void result.controller.start();
+      if (result.controller.state !== 'stopped') return;
+
+      const showPendingOffer = (offer: SyncOfferView) => {
+        pairedSyncApplySecRef.current = offer.peerAudioSeconds;
+        pairedSyncControllerRef.current = result.controller;
+        setPairedSyncDetails({
+          direction: 'audiobook',
+          localPreview: offer.localPreview,
+          peerPreview: offer.peerPreview,
+        });
+      };
+
+      if (pendingSyncOfferRef.current?.hash === resolvedBook.hash) {
+        showPendingOffer(pendingSyncOfferRef.current);
+        return;
       }
+
+      if (syncEvalRef.current?.hash !== resolvedBook.hash) {
+        syncEvalRef.current = {
+          hash: resolvedBook.hash,
+          promise: (async (): Promise<SyncOfferView | null> => {
+            try {
+              const activeAppService = appService ?? (await envConfig.getAppService());
+              const settings = useSettingsStore.getState().settings;
+              const library = useLibraryStore.getState().library;
+              const offer = await evaluateAudiobookOpenSync({
+                library,
+                audiobook: resolvedBook,
+                startAtSec: result.controller.initialStartAt,
+                loadBookConfig: (book, nextSettings) =>
+                  activeAppService.loadBookConfig(book, nextSettings),
+                settings,
+                appService: activeAppService,
+              });
+              if (!offer) {
+                pendingSyncOfferRef.current = null;
+                return null;
+              }
+              const view: SyncOfferView = {
+                hash: resolvedBook.hash,
+                localPreview: offer.localPreview,
+                peerPreview: offer.peerPreview,
+                peerAudioSeconds: offer.peerAudioSeconds,
+              };
+              pendingSyncOfferRef.current = view;
+              return view;
+            } catch (error) {
+              console.warn('[PairedProgress] audiobook open sync check failed:', error);
+              pendingSyncOfferRef.current = null;
+              return null;
+            }
+          })(),
+        };
+      }
+
+      void syncEvalRef.current.promise.then((offer) => {
+        if (cancelled) return;
+        if (offer) {
+          showPendingOffer(offer);
+          return;
+        }
+        if (result.controller.state === 'stopped') {
+          void result.controller.start();
+        }
+      });
     });
 
     return () => {
@@ -374,6 +468,26 @@ const PlayerRoute = () => {
     }
   }, [session, pendingEpisodeId]);
 
+  const finishPairedSync = useCallback(async (applyPeer: boolean) => {
+    const controller = pairedSyncControllerRef.current;
+    const applySec = pairedSyncApplySecRef.current;
+    pairedSyncControllerRef.current = null;
+    pairedSyncApplySecRef.current = null;
+    pendingSyncOfferRef.current = null;
+    setPairedSyncDetails(null);
+    if (!controller) return;
+    if (applyPeer && applySec !== null) {
+      try {
+        await controller.seekToTime(applySec);
+      } catch (error) {
+        console.warn('[PairedProgress] seek to ebook position failed:', error);
+      }
+    }
+    if (controller.state === 'stopped') {
+      void controller.start();
+    }
+  }, []);
+
   return (
     <div
       className={clsx(
@@ -410,6 +524,14 @@ const PlayerRoute = () => {
         </div>
       ) : (
         <Spinner loading />
+      )}
+      {pairedSyncDetails && (
+        <PairedProgressSyncResolver
+          details={pairedSyncDetails}
+          onKeepLocal={() => void finishPairedSync(false)}
+          onApplyPeer={() => void finishPairedSync(true)}
+          onClose={() => void finishPairedSync(false)}
+        />
       )}
       <Toast />
     </div>
