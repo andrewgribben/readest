@@ -67,11 +67,10 @@ describe('isAudioLink', () => {
 });
 
 describe('classifyAcquisitionLink with audio', () => {
-  // Audio is played, never imported as a book, so it must not be offered as a
-  // download candidate -- but it is also not a format we should condemn.
-  it('does not report an audio link as importable', () => {
-    expect(classifyAcquisitionLink(link({ href: '/dl/1', type: 'audio/mpeg' }))).not.toBe(
-      'supported',
+  // Audio is streamed via an OPDSAUDIO stub, never imported as a book file.
+  it('reports an audio link as unsupported for ebook acquisition', () => {
+    expect(classifyAcquisitionLink(link({ href: '/dl/1', type: 'audio/mpeg' }))).toBe(
+      'unsupported',
     );
   });
 });
