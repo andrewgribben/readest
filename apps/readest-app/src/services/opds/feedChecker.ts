@@ -14,10 +14,16 @@ import { isWebAppPlatform } from '@/services/environment';
 import { fetchWithAuth } from '@/app/opds/utils/opdsReq';
 import { resolveURL, looksLikeXMLContent, parseOPDSXML } from '@/app/opds/utils/opdsUtils';
 import { normalizeCustomHeaders } from '@/utils/customHeaders';
+import { audioMimeType, pickAudioLinks, type OpdsAudioTrackLink } from './audiobook';
 import { getOPDSCoverHref } from './cover';
 import { classifyAcquisitionLink, pickPreferredLink } from './formats';
 import { getOPDSBookMetadata } from './metadata';
-import type { OPDSSubscriptionState, PendingItem } from './types';
+import type {
+  CatalogDiscovery,
+  OPDSSubscriptionState,
+  PendingAudioItem,
+  PendingItem,
+} from './types';
 import { MAX_CRAWL_DEPTH, MAX_FEEDS_PER_CRAWL, MAX_PAGES_PER_FEED } from './types';
 
 const SORT_NEW_REL = 'http://opds-spec.org/sort/new';
@@ -77,14 +83,24 @@ export function getAcquisitionLink(pub: OPDSPublication): ValidAcqLink | undefin
 
 /**
  * Derive a stable entry ID from a publication.
- * Primary: Atom <id>. Fallback: resolved acquisition URL.
+ * Primary: Atom <id>. Fallback: resolved ebook acquisition URL, then first
+ * audio track URL (audio-only entries have no ebook acquisition).
  */
 export function getEntryId(pub: OPDSPublication, baseURL: string): string | undefined {
   if (pub.metadata.id) return pub.metadata.id;
   const acqLink = getAcquisitionLink(pub);
   if (acqLink) return resolveURL(acqLink.href, baseURL);
+  const audio = pickAudioLinks(pub.links).find((link) => link.href);
+  if (audio?.href) return resolveURL(audio.href, baseURL);
   return undefined;
 }
+
+const authorFromPublication = (pub: OPDSPublication): string => {
+  const metadata = getOPDSBookMetadata(pub);
+  if (Array.isArray(metadata.author)) return metadata.author.filter(Boolean).join(' & ');
+  if (typeof metadata.author === 'string' && metadata.author.trim()) return metadata.author;
+  return '';
+};
 
 /**
  * Extract the rel=next pagination URL from a feed.
@@ -98,9 +114,9 @@ export function getNextPageUrl(feed: OPDSFeed): string | undefined {
 }
 
 /**
- * Collect new PendingItems from a feed, skipping entries already in knownIds
- * and de-duplicating entries that appear multiple times within the same feed
- * (e.g. listed under both feed.publications and a group).
+ * Collect new ebook PendingItems from a feed, skipping entries already in
+ * knownIds and de-duplicating within the feed. Audio-only publications are
+ * ignored here — see {@link collectNewAudioEntries}.
  */
 export function collectNewEntries(
   feed: OPDSFeed,
@@ -132,6 +148,54 @@ export function collectNewEntries(
       coverHref: getOPDSCoverHref(pub),
       metadata: Object.keys(metadata).length ? metadata : undefined,
       mimeType: acqLink.type ?? 'application/octet-stream',
+      updated: pub.metadata.updated,
+      baseURL,
+    });
+  }
+  return items;
+}
+
+/**
+ * Collect new audiobook stubs from a feed. An entry qualifies when it has at
+ * least one safe audio acquisition link; ebook-only entries are skipped.
+ */
+export function collectNewAudioEntries(
+  feed: OPDSFeed,
+  knownIds: Set<string>,
+  baseURL: string,
+): PendingAudioItem[] {
+  const allPubs: OPDSPublication[] = [
+    ...(feed.publications ?? []),
+    ...(feed.groups?.flatMap((g) => g.publications ?? []) ?? []),
+  ];
+
+  const items: PendingAudioItem[] = [];
+  const seenInBatch = new Set<string>();
+  for (const pub of allPubs) {
+    const entryId = getEntryId(pub, baseURL);
+    if (!entryId) continue;
+    if (knownIds.has(entryId)) continue;
+    if (seenInBatch.has(entryId)) continue;
+
+    const audioLinks = pickAudioLinks(pub.links).filter(
+      (link): link is typeof link & { href: string } => !!link.href && isSafeAcquisitionLink(link),
+    );
+    if (audioLinks.length === 0) continue;
+
+    seenInBatch.add(entryId);
+    const metadata = getOPDSBookMetadata(pub);
+    const tracks: OpdsAudioTrackLink[] = audioLinks.map((link) => ({
+      href: link.href,
+      mimeType: audioMimeType(link),
+      ...(link.title ? { title: link.title } : {}),
+    }));
+    items.push({
+      entryId,
+      title: pub.metadata.title || tracks[0]?.title || 'Untitled',
+      author: authorFromPublication(pub),
+      coverHref: getOPDSCoverHref(pub),
+      metadata: Object.keys(metadata).length ? metadata : undefined,
+      tracks,
       updated: pub.metadata.updated,
       baseURL,
     });
@@ -282,24 +346,28 @@ interface CrawlContext {
 
 /**
  * Walk feeds breadth-first from an already-fetched start feed, collecting
- * new PendingItems. Every feed's rel=next chain is followed up to
- * MAX_PAGES_PER_FEED pages. When ctx.crawlNav is set, subsection navigation
- * entries are followed too, at most MAX_CRAWL_DEPTH levels below the start
- * feed and MAX_FEEDS_PER_CRAWL fetches in total.
+ * new ebook downloads and audiobook stubs. Every feed's rel=next chain is
+ * followed up to MAX_PAGES_PER_FEED pages. When ctx.crawlNav is set,
+ * subsection navigation entries are followed too, at most MAX_CRAWL_DEPTH
+ * levels below the start feed and MAX_FEEDS_PER_CRAWL fetches in total.
  */
 async function crawlFeeds(
   start: { feed: OPDSFeed; baseURL: string },
   ctx: CrawlContext,
-): Promise<PendingItem[]> {
-  const items: PendingItem[] = [];
+): Promise<CatalogDiscovery> {
+  const ebooks: PendingItem[] = [];
+  const audiobooks: PendingAudioItem[] = [];
   const queue: Array<{ url: string; depth: number; page: number }> = [];
 
   const processFeed = (feed: OPDSFeed, baseURL: string, depth: number, page: number) => {
-    const newItems = collectNewEntries(feed, ctx.knownIds, baseURL);
+    const newEbooks = collectNewEntries(feed, ctx.knownIds, baseURL);
+    const newAudio = collectNewAudioEntries(feed, ctx.knownIds, baseURL);
     // Mark as known so a book listed by several crawled feeds is only
-    // collected once.
-    for (const item of newItems) ctx.knownIds.add(item.entryId);
-    items.push(...newItems);
+    // collected once. Audio and ebook share the entry-id namespace.
+    for (const item of newEbooks) ctx.knownIds.add(item.entryId);
+    for (const item of newAudio) ctx.knownIds.add(item.entryId);
+    ebooks.push(...newEbooks);
+    audiobooks.push(...newAudio);
 
     const nextHref = getNextPageUrl(feed);
     if (nextHref && page < MAX_PAGES_PER_FEED) {
@@ -335,12 +403,15 @@ async function crawlFeeds(
     );
   }
 
-  return items;
+  return { ebooks, audiobooks };
 }
+
+const EMPTY_DISCOVERY: CatalogDiscovery = { ebooks: [], audiobooks: [] };
 
 /**
  * Check a catalog for new items. Pure discovery — no downloads, no state
- * mutations.
+ * mutations. Returns ebook download candidates and audiobook stub candidates
+ * separately so Auto-download never tries to `importBook` an MP3 (#6224).
  *
  * Library catalogs (those exposing a "by newest" feed, see
  * findNewestFeedURL) are checked through that feed and its rel=next pages
@@ -352,7 +423,7 @@ async function crawlFeeds(
 export async function checkFeedForNewItems(
   catalog: OPDSCatalog,
   state: OPDSSubscriptionState,
-): Promise<PendingItem[]> {
+): Promise<CatalogDiscovery> {
   const knownIds = new Set(state.knownEntryIds);
   const customHeaders = normalizeCustomHeaders(catalog.customHeaders);
   const username = catalog.username ?? '';
@@ -360,7 +431,7 @@ export async function checkFeedForNewItems(
   const visited = new Set<string>([catalog.url]);
 
   const root = await fetchFeed(catalog.url, username, password, customHeaders);
-  if (!root) return [];
+  if (!root) return EMPTY_DISCOVERY;
 
   const ctx: CrawlContext = {
     catalog,
@@ -388,7 +459,7 @@ export async function checkFeedForNewItems(
     console.warn(
       `OPDS sync: catalog "${catalog.name}" has no publications or subdirectories; skipping`,
     );
-    return [];
+    return EMPTY_DISCOVERY;
   }
   return crawlFeeds(root, { ...ctx, crawlNav: true });
 }
@@ -396,13 +467,14 @@ export async function checkFeedForNewItems(
 /**
  * Every publication currently reachable under the catalog's crawl rules —
  * ignoring `knownEntryIds`. Used by Update library to refresh already-synced
- * books; discovery of *new* books stays on {@link checkFeedForNewItems}.
+ * ebooks; discovery of *new* books stays on {@link checkFeedForNewItems}.
  */
 export async function checkFeedForAllItems(catalog: OPDSCatalog): Promise<PendingItem[]> {
-  return checkFeedForNewItems(catalog, {
+  const discovery = await checkFeedForNewItems(catalog, {
     catalogId: catalog.id,
     lastCheckedAt: 0,
     knownEntryIds: [],
     failedEntries: [],
   });
+  return discovery.ebooks;
 }
