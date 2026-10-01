@@ -34,6 +34,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useEinkMode } from '@/hooks/useEinkMode';
 import { bookOrbitProgressProvider } from '../hooks/bookOrbitProgressProvider';
 import { useKOSync } from '../hooks/useKOSync';
+import { usePairedAudiobookProgressSync } from '../hooks/usePairedAudiobookProgressSync';
 import { useFileSync } from '../hooks/useFileSync';
 import {
   applyEinkModeAttribute,
@@ -105,6 +106,7 @@ import AutoscrollIndicator from './AutoscrollIndicator';
 import AutoScrollControl from './AutoScrollControl';
 import AutoScrollSpeedOverlay from './AutoScrollSpeedOverlay';
 import Spinner from '@/components/Spinner';
+import PairedProgressSyncResolver from '@/components/PairedProgressSyncResolver';
 import KOSyncConflictResolver from './KOSyncResolver';
 import ImageViewer from './ImageViewer';
 import TableViewer from './TableViewer';
@@ -197,6 +199,9 @@ const FoliateViewer: React.FC<{
   useBookCoverAutoSave(bookKey);
   const { syncState, conflictDetails, resolveWithLocal, resolveWithRemote } = useKOSync(bookKey);
   const bookOrbitSync = useKOSync(bookKey, bookOrbitProgressProvider);
+  const pairedAudiobookSync = usePairedAudiobookProgressSync(bookKey, {
+    readingProgressConflict: syncState === 'conflict' || bookOrbitSync.syncState === 'conflict',
+  });
   useFileSync(bookKey);
   useTextTranslation(bookKey, viewRef.current);
 
@@ -1226,6 +1231,16 @@ const FoliateViewer: React.FC<{
           onClose={bookOrbitSync.resolveWithLocal}
         />
       )}
+      {pairedAudiobookSync.syncDetails &&
+        syncState !== 'conflict' &&
+        bookOrbitSync.syncState !== 'conflict' && (
+          <PairedProgressSyncResolver
+            details={pairedAudiobookSync.syncDetails}
+            onKeepLocal={pairedAudiobookSync.resolveKeepLocal}
+            onApplyPeer={pairedAudiobookSync.resolveApplyPeer}
+            onClose={pairedAudiobookSync.resolveKeepLocal}
+          />
+        )}
     </>
   );
 };
