@@ -392,3 +392,17 @@ export async function checkFeedForNewItems(
   }
   return crawlFeeds(root, { ...ctx, crawlNav: true });
 }
+
+/**
+ * Every publication currently reachable under the catalog's crawl rules —
+ * ignoring `knownEntryIds`. Used by Update library to refresh already-synced
+ * books; discovery of *new* books stays on {@link checkFeedForNewItems}.
+ */
+export async function checkFeedForAllItems(catalog: OPDSCatalog): Promise<PendingItem[]> {
+  return checkFeedForNewItems(catalog, {
+    catalogId: catalog.id,
+    lastCheckedAt: 0,
+    knownEntryIds: [],
+    failedEntries: [],
+  });
+}

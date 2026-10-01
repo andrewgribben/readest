@@ -1,5 +1,15 @@
 export { syncSubscribedCatalogs } from './autoDownload';
-export { checkFeedForNewItems, getAcquisitionLink, getEntryId } from './feedChecker';
+export {
+  checkFeedForNewItems,
+  checkFeedForAllItems,
+  getAcquisitionLink,
+  getEntryId,
+} from './feedChecker';
+export {
+  refreshCatalogLibrary,
+  type RefreshCatalogProgress,
+  type RefreshCatalogResult,
+} from './refreshCatalogLibrary';
 export {
   loadSubscriptionState,
   saveSubscriptionState,
