@@ -21,6 +21,7 @@ import {
 import { makeAbsFilePath } from '@/utils/audiobook';
 import type { Book, BookConfig, PairedAudiobook } from '@/types/book';
 import type { SystemSettings } from '@/types/settings';
+import type { AppService } from '@/types/system';
 
 const chapters: AudiobookTextChapter[] = [
   { id: 'c1', label: 'Chapter 1', href: 'c1.xhtml' },
