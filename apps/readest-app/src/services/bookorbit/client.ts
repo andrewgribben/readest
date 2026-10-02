@@ -36,6 +36,7 @@ export interface BookOrbitPlaybackState {
   assetId?: string;
   positionMs?: number;
   revision?: number;
+  capturedAt?: string;
   updatedAt?: string;
 }
 

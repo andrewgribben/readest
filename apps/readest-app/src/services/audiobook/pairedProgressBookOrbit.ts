@@ -42,12 +42,14 @@ export const fetchBookOrbitPlaybackSeconds = async (
     if (!(serverSeconds > 0)) return null;
 
     const duration = Math.max(...tracks.map((track) => track.startOffset + track.duration), 0);
+    const timestamp = state.capturedAt ?? state.updatedAt;
+    const parsed = timestamp ? Date.parse(timestamp) : NaN;
     const serverFresherThanLocal =
+      Number.isFinite(parsed) &&
       Math.abs(serverSeconds - localSeconds) > pairedAudioDiffThresholdSec(duration);
-    const parsed = state.updatedAt ? Date.parse(state.updatedAt) : NaN;
     return {
       seconds: serverSeconds,
-      updatedAt: serverFresherThanLocal ? (Number.isFinite(parsed) ? parsed : Date.now()) : 0,
+      updatedAt: Number.isFinite(parsed) ? parsed : 0,
       serverFresherThanLocal,
     };
   } catch {
