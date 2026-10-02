@@ -706,6 +706,37 @@ export class TTSController extends EventTarget {
     return ssml;
   }
 
+  // The ebook sync target is approximate; retain the accepted recording
+  // timestamp when starting its paired narration.
+  async startFromPairedAudioPosition(seconds: number): Promise<string | undefined> {
+    const association = this.#pairedAudiobook;
+    if (!association || !this.narrationActive) return undefined;
+    let offset = seconds;
+    const file = association.files.find((candidate) => {
+      if (offset < candidate.duration) return true;
+      offset -= candidate.duration;
+      return false;
+    });
+    if (!file) return undefined;
+    const chapter = narratedAudioChapters(this.view.book, association).find(
+      (entry) =>
+        entry.audioHref === file.path &&
+        entry.chapter.start <= offset &&
+        offset < entry.chapter.end,
+    );
+    if (!chapter) return undefined;
+    await this.#initTTSForSection(chapter.sectionIndex);
+    const timeline = await this.ensureTimeline();
+    const sectionTime = this.#sectionTimeAt(file.path, offset);
+    if (!timeline || sectionTime === null) return undefined;
+    const target = timeline.sentenceAtTime(sectionTime);
+    if (!target) return undefined;
+    const range = this.#rangeAtSeekTarget(target.sentence, target.withinMediaSec);
+    const ssml = this.startFromRange(range);
+    this.ttsClient.setNextChunkPosition?.(target.withinMediaSec);
+    return ssml;
+  }
+
   async #initTTSForSection(sectionIndex: number): Promise<boolean> {
     const sections = this.view.book.sections;
     if (!sections || sectionIndex < 0 || sectionIndex >= sections.length) {

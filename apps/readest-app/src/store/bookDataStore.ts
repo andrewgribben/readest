@@ -63,6 +63,9 @@ export interface BookData {
   config: BookConfig | null;
   bookDoc: BookDoc | null;
   isFixedLayout: boolean;
+  // Exact listening position accepted by the reader's sync prompt, consumed
+  // by the next paired narration start instead of estimating from ebook text.
+  pairedAudiobookResumePosition?: number;
 }
 
 interface BookDataState {

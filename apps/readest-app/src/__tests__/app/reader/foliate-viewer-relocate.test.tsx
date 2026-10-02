@@ -49,6 +49,9 @@ vi.mock('@/app/reader/hooks/useMiddleClickAutoscroll', () => ({
   useMiddleClickAutoscroll: () => null,
 }));
 vi.mock('@/app/reader/hooks/useKOSync', () => ({ useKOSync: () => ({}) }));
+vi.mock('@/app/reader/hooks/usePairedAudiobookProgressSync', () => ({
+  usePairedAudiobookProgressSync: () => ({ syncDetails: null }),
+}));
 vi.mock('@/app/reader/hooks/useIframeEvents', () => ({
   useMouseEvent: () => ({}),
   useTouchEvent: () => ({}),

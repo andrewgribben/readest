@@ -4,6 +4,7 @@ import {
   associationMatchesAudiobook,
   findPairedAudiobookStub,
   findPairedEbook,
+  resolvePairedAudiobookPosition,
 } from '@/services/audiobook/pairedProgressLookup';
 import { makeAbsFilePath } from '@/utils/audiobook';
 import { makeBookOrbitAudioFilePath } from '@/services/bookorbit/audiobookId';
@@ -197,5 +198,47 @@ describe('findPairedEbook', () => {
       {} as SystemSettings,
     );
     expect(match).toBeNull();
+  });
+});
+
+describe('resolvePairedAudiobookPosition', () => {
+  it('keeps saved local playback when the BookOrbit server position is older', async () => {
+    const stub = { ...bookOrbitStub(9), updatedAt: 30, progress: [180, 400] as [number, number] };
+    const resolved = await resolvePairedAudiobookPosition(
+      stub,
+      bookOrbitAssociation(9),
+      async () => ({
+        seconds: 80,
+        updatedAt: 20,
+        serverFresherThanLocal: true,
+      }),
+    );
+    expect(resolved).toEqual({ seconds: 180, updatedAt: 30, serverFresher: false });
+  });
+
+  it('uses a newer server position, including when listening moved backwards', async () => {
+    const resolved = await resolvePairedAudiobookPosition(
+      bookOrbitStub(9),
+      bookOrbitAssociation(9),
+      async () => ({
+        seconds: 20,
+        updatedAt: 30,
+        serverFresherThanLocal: true,
+      }),
+    );
+    expect(resolved).toEqual({ seconds: 20, updatedAt: 30, serverFresher: true });
+  });
+
+  it('can read server progress without a local audiobook stub', async () => {
+    const resolved = await resolvePairedAudiobookPosition(
+      null,
+      bookOrbitAssociation(9),
+      async () => ({
+        seconds: 80,
+        updatedAt: 20,
+        serverFresherThanLocal: true,
+      }),
+    );
+    expect(resolved).toEqual({ seconds: 80, updatedAt: 20, serverFresher: true });
   });
 });

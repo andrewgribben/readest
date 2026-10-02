@@ -297,6 +297,32 @@ describe('narration selection', () => {
     expect((await controller.getVoices('en'))[0]!.voices[0]!.name).toBe('External Narrator');
   });
 
+  test.each([
+    0, 90,
+  ])('starts paired narration at the exact timestamp after %s preceding seconds', async (precedingSeconds) => {
+    const controller = new TTSController(
+      { openFile: vi.fn() } as unknown as AppService,
+      makePairedView(),
+    );
+    controller.pairedAudiobook = {
+      ...PAIRED_AUDIOBOOK,
+      files: precedingSeconds
+        ? [
+            { id: 'intro', name: 'intro.mp3', path: 'intro.mp3', duration: precedingSeconds },
+            ...PAIRED_AUDIOBOOK.files,
+          ]
+        : PAIRED_AUDIOBOOK.files,
+    };
+    await controller.init();
+    const setPosition = vi.spyOn(controller.ttsMediaOverlayClient, 'setNextChunkPosition');
+
+    const ssml = await controller.startFromPairedAudioPosition(precedingSeconds + 12.345);
+
+    expect(ssml).toContain('<mark name="0"/>');
+    expect(controller.getSectionIndex()).toBe(1);
+    expect(setPosition.mock.calls.at(-1)?.[0]).toBeCloseTo(12.345, 6);
+  });
+
   test('streams a paired audiobook from a direct asset URL on desktop Tauri', async () => {
     const view = makePairedView();
     const appService = {
