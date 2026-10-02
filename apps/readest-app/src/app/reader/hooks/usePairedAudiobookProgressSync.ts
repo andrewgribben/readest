@@ -31,6 +31,7 @@ export const usePairedAudiobookProgressSync = (
 
   const [syncDetails, setSyncDetails] = useState<PairedProgressSyncDetails | null>(null);
   const offerRef = useRef<PairedSyncOffer | null>(null);
+  const resolvedBookKeyRef = useRef<string | null>(null);
   const evalRef = useRef<{ bookKey: string; promise: Promise<PairedSyncOffer | null> } | null>(
     null,
   );
@@ -38,10 +39,12 @@ export const usePairedAudiobookProgressSync = (
   useEffect(() => {
     evalRef.current = null;
     offerRef.current = null;
+    resolvedBookKeyRef.current = null;
     setSyncDetails(null);
   }, [bookKey]);
 
   useEffect(() => {
+    if (resolvedBookKeyRef.current === bookKey) return;
     if (options.readingProgressConflict) return;
     if (!progress?.location) return;
 
@@ -82,7 +85,7 @@ export const usePairedAudiobookProgressSync = (
 
     let cancelled = false;
     void evalRef.current.promise.then((offer) => {
-      if (cancelled || !offer) return;
+      if (cancelled || !offer || resolvedBookKeyRef.current === bookKey) return;
       offerRef.current = offer;
       setSyncDetails({
         direction: 'ebook',
@@ -97,17 +100,30 @@ export const usePairedAudiobookProgressSync = (
   }, [bookKey, progress, options.readingProgressConflict, getBookData, getConfig]);
 
   const resolveKeepLocal = useCallback(() => {
+    resolvedBookKeyRef.current = bookKey;
     offerRef.current = null;
     setSyncDetails(null);
-  }, []);
+  }, [bookKey]);
 
   const resolveApplyPeer = useCallback(() => {
+    resolvedBookKeyRef.current = bookKey;
     const offer = offerRef.current;
     const view = getView(bookKey);
     offerRef.current = null;
     setSyncDetails(null);
     if (!offer?.ebookTarget || !view) return;
     if (useReaderStore.getState().getViewState(bookKey)?.previewMode) return;
+
+    const id = bookKey.split('-')[0]!;
+    useBookDataStore.setState((state) => ({
+      booksData: {
+        ...state.booksData,
+        [id]: {
+          ...state.booksData[id]!,
+          pairedAudiobookResumePosition: offer.peerAudioSeconds,
+        },
+      },
+    }));
 
     const { cfi, fraction } = offer.ebookTarget;
     if (cfi) {

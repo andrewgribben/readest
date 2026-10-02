@@ -1004,14 +1004,31 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
         // ended the utterance immediately and killed the session.
         const speakSelection = oneTime && !!ttsSpeakRange;
         const narrateSelection = speakSelection && ttsController.narrationActive;
+        const resumePosition = bookData.pairedAudiobookResumePosition;
+        const pairedResumeSSML =
+          !speakSelection && resumePosition !== undefined
+            ? await ttsController.startFromPairedAudioPosition(resumePosition)
+            : undefined;
+        if (pairedResumeSSML) {
+          useBookDataStore.setState((state) => ({
+            booksData: {
+              ...state.booksData,
+              [bookData.id]: {
+                ...state.booksData[bookData.id]!,
+                pairedAudiobookResumePosition: undefined,
+              },
+            },
+          }));
+        }
         const ssml =
-          speakSelection && !narrateSelection
+          pairedResumeSSML ??
+          (speakSelection && !narrateSelection
             ? genSSMLRaw(ttsSpeakRange!.toString().trim())
             : narrateSelection
               ? ttsController.startFromRange(ttsSpeakRange!)
               : ttsFromRange
                 ? ttsController.startFromRange(ttsFromRange)
-                : view.tts?.start();
+                : view.tts?.start());
         if (ssml) {
           const lang = parseSSMLLang(ssml, primaryLang) || 'en';
           setIsPlaying(true);

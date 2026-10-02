@@ -133,7 +133,9 @@ export const resolvePairedAudiobookPosition = async (
 
   if (association.source?.kind === 'bookorbit') {
     const server = await fetchBookOrbit(association, localSeconds);
-    if (server) {
+    // A pending playback upload can leave the server behind this device.
+    // A position difference alone does not make that older state fresher.
+    if (server && (!stub || server.updatedAt > localUpdatedAt)) {
       return {
         seconds: server.seconds,
         updatedAt: server.serverFresherThanLocal
