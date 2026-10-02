@@ -73,7 +73,11 @@ const nextConfig = {
   assetPrefix: '',
   reactStrictMode: true,
   serverExternalPackages: ['isows'],
-  allowedDevOrigins: ['192.168.2.120'],
+  // Tauri `android/ios dev --host` loads the Next dev server from the machine's
+  // LAN IP (not localhost). Next blocks cross-origin /_next/* (incl. HMR) unless
+  // that hostname is listed. Wildcard private ranges so every developer/network
+  // works without editing this per-IP (a single hard-coded address only helps one machine).
+  allowedDevOrigins: ['192.168.*.*', '10.*.*.*', '172.*.*.*'],
   webpack: (config, { isServer }) => {
     config.resolve.alias = {
       ...config.resolve.alias,
