@@ -260,7 +260,7 @@ export class AudiobookController extends EventTarget implements PlaybackSource {
   async seekToTime(seconds: number): Promise<void> {
     const clamped = Math.max(0, Math.min(seconds, this.#timeline.duration));
     const { trackIndex, offset } = this.#timeline.locate(clamped);
-    if (trackIndex === this.#trackIndex) {
+    if (this.#started && trackIndex === this.#trackIndex) {
       this.#clock.currentTime = offset;
     } else {
       await this.#loadGlobal(clamped);

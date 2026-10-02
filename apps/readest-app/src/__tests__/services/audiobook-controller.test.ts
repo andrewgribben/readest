@@ -241,15 +241,27 @@ describe('AudiobookController', () => {
     expect(controller.getTitle()).toBe('Episode One');
   });
 
-  it('a seek before start survives the initial load', async () => {
-    await controller.seekToTime(150); // lands in track 2, before start() ever ran
-    expect(clock.url).toBe('http://x/f/2?token=t');
+  it.each([
+    { position: 50, track: 1 },
+    { position: 150, track: 2 },
+  ])('a seek to $position before start loads the track and survives playback', async ({
+    position,
+    track,
+  }) => {
+    const onSeek = vi.fn();
+    const load = vi.spyOn(clock, 'load');
+    controller = new AudiobookController(source(), clock, { onSeek });
+
+    await controller.seekToTime(position);
+    expect(clock.url).toBe(`http://x/f/${track}?token=t`);
     expect(clock.currentTime).toBe(50);
+    expect(onSeek).toHaveBeenCalledWith(position);
 
     await controller.start();
-    // start() must not reload source.startAt (track 1) over the earlier seek.
-    expect(clock.url).toBe('http://x/f/2?token=t');
+    // Accepting the paired ebook position must not reload the old audio position.
+    expect(load).toHaveBeenCalledTimes(1);
     expect(clock.currentTime).toBe(50);
+    expect(controller.getPlaybackInfo()?.position).toBe(position);
     expect(controller.state).toBe('playing');
   });
 });
