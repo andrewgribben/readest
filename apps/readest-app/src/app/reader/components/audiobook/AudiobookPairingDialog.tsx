@@ -39,6 +39,7 @@ import {
 import { bookOrbitPreviewClip } from '@/services/bookorbit/narration';
 import { listPairableOpdsBooks, loadOpdsPairingSource } from '@/services/opds/pairing';
 import { opdsPreviewClip } from '@/services/opds/narration';
+import { resolveDownloadedOpdsPairing } from '@/services/opds/pairedOffline';
 import { findABSServerById } from '@/store/absServerStore';
 import { useBookDataStore } from '@/store/bookDataStore';
 import { useLibraryStore } from '@/store/libraryStore';
@@ -153,6 +154,7 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
   const saveConfig = useBookDataStore((state) => state.saveConfig);
   const initialAssociation = getConfig(bookKey)?.audiobook ?? null;
   const [association] = useState<PairedAudiobook | null>(initialAssociation);
+  const [downloadedPairing, setDownloadedPairing] = useState(false);
   const [step, setStep] = useState<WizardStep>(association ? 'summary' : 'select');
   const [preparedFiles, setPreparedFiles] = useState<PreparedImportFile[]>([]);
   const [preparedStreamed, setPreparedStreamed] = useState<StreamedPairingSource | null>(null);
@@ -216,6 +218,17 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
   ).length;
   const book = getBookData(bookKey)?.book;
   const busy = !!busyMessage;
+
+  useEffect(() => {
+    if (!appService || !association) return;
+    let cancelled = false;
+    void resolveDownloadedOpdsPairing(appService, association).then((download) => {
+      if (!cancelled) setDownloadedPairing(!!download);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [appService, association]);
 
   useEffect(() => {
     if (!appService) return;
@@ -528,7 +541,7 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
             // Source-neutral: ABS, BookOrbit, and OPDS pairings all land here,
             // and the upstream's own name is shown in the row below.
             streamedFrom
-              ? _('Manage the streamed audiobook paired with this ebook.')
+              ? _('Manage the audiobook paired with this ebook.')
               : _('Manage the local recording paired with this ebook.')
           }
         />
@@ -545,11 +558,16 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
               <p className='truncate font-medium'>{association.title || book?.title}</p>
               <p className='text-neutral-content text-[0.85em]'>
                 {streamedFrom
-                  ? _('{{chapters}} audio chapters · {{duration}} · Streamed from {{server}}', {
-                      chapters: association.chapters.length,
-                      duration: formatAudiobookTimecode(totalDuration),
-                      server: streamedFrom,
-                    })
+                  ? _(
+                      downloadedPairing
+                        ? '{{chapters}} audio chapters · {{duration}} · Downloaded from {{server}}'
+                        : '{{chapters}} audio chapters · {{duration}} · Streamed from {{server}}',
+                      {
+                        chapters: association.chapters.length,
+                        duration: formatAudiobookTimecode(totalDuration),
+                        server: streamedFrom,
+                      },
+                    )
                   : _('{{files}} files · {{chapters}} audio chapters · {{duration}}', {
                       files: association.files.length,
                       chapters: association.chapters.length,
@@ -669,7 +687,7 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
           </span>
           <span className='font-medium'>{_('Choose from OPDS')}</span>
           <span className='text-neutral-content text-[0.85em]'>
-            {_('Streamed from your OPDS catalog, nothing to download')}
+            {_('Uses a downloaded copy when available, otherwise streams from your OPDS catalog')}
           </span>
         </button>
       )}
