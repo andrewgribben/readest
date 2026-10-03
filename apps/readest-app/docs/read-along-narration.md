@@ -114,8 +114,13 @@ starting position; reading progress still syncs through Readest as usual.
 An OPDS pairing works the same way for audiobooks that were played from a
 catalog and landed in the library as `OPDSAUDIO` (or `BOOKORBIT` when the
 catalog is a configured BookOrbit server). The association stores the catalog
-id and track list; playback reuses the catalog credentials, with the same
-web+auth limit as the standalone OPDS player. BookOrbit pairings may also be
+id and track list. Paired playback prefers the audiobook's completed local
+download when its tracks are present and match the paired timeline. The
+provider identity and mappings stay unchanged, so listening progress still
+belongs to the same audiobook. Without a usable local copy, playback reuses
+the catalog credentials, with the same web+auth limit as the standalone OPDS
+player. The pairing summary identifies a usable download rather than always
+labelling the audiobook as streamed. BookOrbit pairings may also be
 created automatically when an ebook is downloaded from an OPDS entry that
 offers matching audio.
 
