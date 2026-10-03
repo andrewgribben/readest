@@ -347,3 +347,20 @@ PR #1 now has one implementation commit and one documentation commit. Reverting 
 
 
 The user-facing behaviour, verification record and remaining work for these changes are described in [OPDS audiobooks and saved listening progress](features/opds-audiobooks.md).
+
+## Android Auto recorded audio: downloaded verification stage
+
+Android Auto previously relayed chapter next/previous events and depended on a phone WebView to open recordings. Its cold native fallback handled synthesized EPUB speech only. The JavaScript Play handler also ignored a freshly stopped controller. Recorded audio now uses the shared 15-second backward and 30-second forward transport behavior; plain synthesized speech retains paragraph navigation.
+
+For a new car selection with no active phone session, a validated downloaded recording starts in MediaPlaybackService's own ExoPlayer. It does not try to launch a background phone Activity. The private cached media-library descriptor includes absolute downloaded track paths, their global offsets, the audiobook identity and the two position candidates. No file paths or authentication data are exposed in browse-item metadata. The app-lock library restrictions remain in force. A process-local unguessable token authenticates the service's own cold-audio foreground-start Intent.
+
+A new paired session with candidates more than thirty seconds apart waits for a choice. Car controls expose Resume audiobook and Start from ebook; a Choose playback position browse node supplies both timestamps as a fallback. Request-specific IDs reject stale car actions. The phone dialog and car actions resolve the same request while the WebView exists. A native cold session owns its request until phone UI takes over. Pending choices do not report listening progress or time out as failed startup.
+
+Cold playback writes Books/<audioHash>/car-listening.json atomically every fifteen seconds while playing and on pause/seek/end. It stores the global position, recording duration and capture time. This independent journal avoids stale phone library writes erasing the native checkpoint. Standalone and paired openers import a valid newer journal, retaining capture time and accepting backward movement; older or mismatched journals cannot replace newer phone progress. The native clock is available through optional recordedBookHash and recordedPositionMs fields on the existing playout_position result. A phone player attaching to the live recording inherits the actual native offset and retires the service-owned playback, so two recordings cannot play together. Attaching to a live session does not create a new position-choice prompt.
+
+This first APK verifies downloaded recordings. Authenticated cold streaming and direct provider reporting/retry reconciliation are the next verification stage, after downloaded playback is confirmed. Existing WebView-owned provider reporting remains unchanged. Native journals remain durable locally in the meantime. Do not claim cold provider streaming has been verified by the downloaded tests.
+
+PR #10 now has one implementation commit and one documentation commit. Revert its implementation commit to remove native recorded startup, car choice projection and journal reconciliation while retaining PR #1. PR #1 is also consolidated; restoring its former startup behaviour requires a targeted source change or reverting its implementation as a whole, not reverting retired paired-choice commits. Keep RecordedAudioTimeline.CHOICE_THRESHOLD_SECONDS and AUDIO_POSITION_CHOICE_THRESHOLD_SEC aligned when changing the threshold.
+
+
+For the confirmed manual checks and remaining work, see [Downloaded audiobooks in Android Auto](features/android-auto-audiobooks.md).

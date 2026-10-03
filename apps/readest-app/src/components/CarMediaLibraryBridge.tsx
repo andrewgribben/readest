@@ -11,6 +11,8 @@ import { isAudiobook } from '@/utils/audiobook';
 import { eventDispatcher } from '@/utils/event';
 import { isMainAppWindow } from '@/utils/window';
 import { getConfigFilename } from '@/utils/book';
+import { useAudioPositionChoiceStore } from '@/store/audioPositionChoiceStore';
+import type { CarRecordedAudio } from '@/services/audiobook/carPlayback';
 
 // The browse tree is served by an exported MediaBrowserService, which any
 // installed app is allowed to bind. Keep the published slice deliberately
@@ -31,6 +33,7 @@ export interface CarMediaBook {
 interface AndroidAutoPlaybackSource {
   sourcePath: string | null;
   configPath: string | null;
+  recordedAudio?: CarRecordedAudio | null;
 }
 
 interface AndroidAutoPlaybackSourceState {
@@ -84,6 +87,9 @@ export const getCarMediaPlaybackSourceKey = (
       book?.filePath ?? null,
       book?.url ?? null,
       book?.downloadedAt ?? null,
+      book?.opdsDownloadedAt ?? null,
+      book?.absDownloadedAt ?? null,
+      book?.progress ?? null,
     ] as const;
   });
   sourceKeys.sort(([leftHash], [rightHash]) => leftHash.localeCompare(rightHash));
@@ -93,6 +99,7 @@ export const getCarMediaPlaybackSourceKey = (
 const CarMediaLibraryBridge = () => {
   const library = useLibraryStore((state) => state.library);
   const libraryLoaded = useLibraryStore((state) => state.libraryLoaded);
+  const positionChoice = useAudioPositionChoiceStore((state) => state.pending);
   const coverThumbnails = useLibraryStore((state) => state.coverThumbnails);
   const isLockInitialized = useAppLockStore((state) => state.isInitialized);
   const isUnlocked = useAppLockStore((state) => state.isUnlocked);
@@ -123,7 +130,16 @@ const CarMediaLibraryBridge = () => {
       })),
     [baseCarMediaBooks, playbackSourceState.sources],
   );
-  const booksJson = useMemo(() => JSON.stringify(carMediaBooks), [carMediaBooks]);
+  const booksJson = useMemo(
+    () =>
+      JSON.stringify(
+        carMediaBooks.map((book) => ({
+          ...book,
+          positionChoice: positionChoice?.bookHash === book.hash ? positionChoice : null,
+        })),
+      ),
+    [carMediaBooks, positionChoice],
+  );
   const publishedBooksRef = useRef(carMediaBooks);
   publishedBooksRef.current = carMediaBooks;
 
@@ -166,19 +182,25 @@ const CarMediaLibraryBridge = () => {
       publishedBooksRef.current.map(async ({ hash }) => {
         const book = currentLibrary.find((candidate) => candidate.hash === hash);
         if (!book) return [hash, { sourcePath: null, configPath: null }] as const;
-        const [sourcePath, configPath] = await Promise.all([
+        const [sourcePath, configPath, recordedAudio] = await Promise.all([
           appService.resolveNativeBookFilePath(book).catch((error) => {
             console.warn(`Failed to resolve Android Auto source for ${hash}:`, error);
             return null;
           }),
           appService.resolveFilePath(getConfigFilename(book), 'Books').catch(() => null),
+          import('@/services/audiobook/carPlayback')
+            .then(({ resolveCarRecordedAudio }) => resolveCarRecordedAudio(appService, book))
+            .catch(() => null),
         ]);
-        return [hash, { sourcePath, configPath }] as const;
+        return [hash, { sourcePath, configPath, recordedAudio }] as const;
       }),
     )
       .then((entries) => {
         if (!cancelled) {
-          setPlaybackSourceState({ key: playbackSourceKey, sources: new Map(entries) });
+          setPlaybackSourceState({
+            key: playbackSourceKey,
+            sources: new Map<string, AndroidAutoPlaybackSource>(entries),
+          });
         }
       })
       .catch((error) => console.warn('Failed to resolve Android Auto book paths:', error));
@@ -248,6 +270,19 @@ const CarMediaLibraryBridge = () => {
     return () => {
       cancelled = true;
       void listener?.unregister();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriAppPlatform() || getOSPlatform() !== 'android') return;
+    const listener = addPluginListener(
+      'native-tts',
+      'media-session-position-choice',
+      ({ id, selection }: { id: number; selection: 'listening' | 'reading' }) =>
+        useAudioPositionChoiceStore.getState().resolve(id, selection),
+    );
+    return () => {
+      void listener.then((handle) => handle.unregister());
     };
   }, []);
 

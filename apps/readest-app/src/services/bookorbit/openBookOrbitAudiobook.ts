@@ -107,7 +107,18 @@ export const openBookOrbitAudiobookSession = async (input: {
   appService: AppService;
   book: Book;
 }): Promise<BookOrbitAudiobookSession | null> => {
-  const { appService, book } = input;
+  const { appService } = input;
+  let { book } = input;
+  const journal = await (
+    await import('@/services/audiobook/carPlayback')
+  ).importCarListeningCheckpoint(appService, book);
+  if (journal && journal.updatedAt > book.updatedAt) {
+    book = {
+      ...book,
+      progress: [journal.position, journal.duration],
+      updatedAt: journal.updatedAt,
+    };
+  }
   const bookId = parseBookOrbitAudioFilePath(book.filePath);
   if (bookId === null) return null;
 
