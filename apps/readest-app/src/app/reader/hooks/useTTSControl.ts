@@ -1014,7 +1014,10 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
               : ttsFromRange
                 ? ttsController.startFromRange(ttsFromRange)
                 : view.tts?.start();
-        const candidates = !speakSelection ? ttsController.getPairedStartCandidates() : null;
+        const candidates =
+          !speakSelection && bookData.config?.audiobook
+            ? await ttsController.getPairedStartCandidates()
+            : null;
         if (candidates?.listening !== null && candidates?.listening !== undefined) {
           const selection = needsAudioPositionChoice(candidates.listening, candidates.reading)
             ? await useAudioPositionChoiceStore.getState().request({

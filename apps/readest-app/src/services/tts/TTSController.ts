@@ -1,7 +1,6 @@
 import { FoliateView, ViewTTS } from '@/types/view';
 import { AppService } from '@/types/system';
 import type { PageInfo, PairedAudiobook } from '@/types/book';
-import { pairedAudiobookEntry } from '@/services/audiobook/pairedProgressPersistence';
 import { selectListeningCheckpoint } from '@/services/audiobook/startPosition';
 import { SectionItem } from '@/libs/document';
 import { convertFileSrc } from '@tauri-apps/api/core';
@@ -708,7 +707,7 @@ export class TTSController extends EventTarget {
     return ssml;
   }
 
-  getPairedStartCandidates(): { listening: number | null; reading: number } | null {
+  async getPairedStartCandidates(): Promise<{ listening: number | null; reading: number } | null> {
     const association = this.#pairedAudiobook;
     const tts = this.#getTts();
     if (!association || !this.narrationActive || !(tts instanceof MediaOverlayTTS)) return null;
@@ -717,6 +716,7 @@ export class TTSController extends EventTarget {
       ? pairedListeningPosition(association, start.audioHref, start.seconds)
       : null;
     if (!reading) return null;
+    const { pairedAudiobookEntry } = await import('@/services/audiobook/pairedProgressPersistence');
     const entry = pairedAudiobookEntry(association, false);
     const checkpoint = selectListeningCheckpoint(
       [
