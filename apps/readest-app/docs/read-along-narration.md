@@ -319,3 +319,13 @@ Verified end to end against two very different real books:
   330 MB container, no `media:narrator` (hence the "Book narration" fallback),
   4 unnarrated front-matter sections. Its computed chapter timeline came out at
   2966.8s against the book's declared `media:duration` of 2966.79s.
+
+## Paired startup position choice
+
+A new paired session previously always used the current ebook passage's chapter/proportional audio estimate, even when the recording had a saved listening checkpoint. Playback then reported that estimate as new listening progress. Merely computing a candidate must never save it.
+
+New sessions compare that estimate with the newest valid local listening checkpoint (shared standalone library entry or pairing listeningProgress). Newest means capture time, not greatest playback position; rewinding is legitimate. Durations must match within one second. A difference greater than AUDIO_POSITION_CHOICE_THRESHOLD_SEC (30 seconds) asks whether to resume the audiobook or start from the ebook. Exactly thirty seconds or less resumes the audiobook. The ebook candidate is approximate. One percent was rejected because it represents several minutes on a long recording.
+
+The choice occurs only at new-session startup, never on page turns, ebook sync, or ordinary pause/resume. Dismissal leaves playback stopped and writes no checkpoint. An unplayed session cannot flush its prepared clock on teardown. Choosing the checkpoint positions the recording precisely on its global timeline without reporting a seek before playback. Unmapped timestamps fail explicitly instead of silently selecting the ebook estimate. Reading-driven audio saves remain a separate stage.
+
+Revert the isolated paired-playback-choice commit to restore the previous ebook-derived startup. The threshold is a named constant in services/audiobook/startPosition.ts; adjust that constant and its boundary regression tests together if device testing finds thirty seconds too sensitive.

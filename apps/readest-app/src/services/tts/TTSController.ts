@@ -1,6 +1,8 @@
 import { FoliateView, ViewTTS } from '@/types/view';
 import { AppService } from '@/types/system';
 import type { PageInfo, PairedAudiobook } from '@/types/book';
+import { pairedAudiobookEntry } from '@/services/audiobook/pairedProgressPersistence';
+import { selectListeningCheckpoint } from '@/services/audiobook/startPosition';
 import { SectionItem } from '@/libs/document';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { transformTTSSectionDocument } from './transformDoc';
@@ -43,6 +45,7 @@ import {
 } from './mediaOverlay';
 import {
   adjacentAudioChapter,
+  pairedChapterEntries,
   findPairedAudiobookSection,
   loadPairedAudiobookSection,
   narratedAudioChapters,
@@ -702,6 +705,64 @@ export class TTSController extends EventTarget {
       const position = tts.takeStartPosition();
       if (position !== null) this.ttsClient.setNextChunkPosition?.(position);
     }
+    return ssml;
+  }
+
+  getPairedStartCandidates(): { listening: number | null; reading: number } | null {
+    const association = this.#pairedAudiobook;
+    const tts = this.#getTts();
+    if (!association || !this.narrationActive || !(tts instanceof MediaOverlayTTS)) return null;
+    const start = tts.getStartAudioPosition();
+    const reading = start
+      ? pairedListeningPosition(association, start.audioHref, start.seconds)
+      : null;
+    if (!reading) return null;
+    const entry = pairedAudiobookEntry(association, false);
+    const checkpoint = selectListeningCheckpoint(
+      [
+        association.listeningProgress,
+        entry?.progress
+          ? {
+              position: entry.progress[0],
+              duration: entry.progress[1],
+              updatedAt: entry.updatedAt,
+            }
+          : null,
+      ],
+      reading.duration,
+    );
+    return { listening: checkpoint?.position ?? null, reading: reading.position };
+  }
+
+  /** Prepare an exact global checkpoint without reporting a seek or starting audio. */
+  async preparePairedStartAt(position: number): Promise<string | undefined> {
+    const association = this.#pairedAudiobook;
+    if (!association || !this.narrationActive) return undefined;
+    let offset = 0;
+    const file = association.files.find((candidate) => {
+      if (position >= offset && position < offset + candidate.duration) return true;
+      offset += candidate.duration;
+      return false;
+    });
+    if (!file) throw new Error('Saved audiobook position is outside the recording');
+    const seconds = position - offset;
+    const entry = pairedChapterEntries(this.view.book, association).find(
+      (candidate) =>
+        candidate.audioFile.id === file.id &&
+        candidate.clipBegin <= seconds &&
+        seconds < candidate.clipEnd,
+    );
+    if (!entry || !(await this.#initTTSForSection(entry.sectionIndex))) {
+      throw new Error('Saved audiobook position has no ebook chapter mapping');
+    }
+    const timeline = await this.ensureTimeline();
+    const time = this.#sectionTimeAt(file.path, seconds);
+    const located = time === null ? null : timeline?.sentenceAtTime(time);
+    if (!located) throw new Error('Saved audiobook position has no playable mapping');
+    const ssml = this.#getTts()?.from(
+      this.#rangeAtSeekTarget(located.sentence, located.withinMediaSec),
+    );
+    this.ttsClient.setNextChunkPosition?.(located.withinMediaSec);
     return ssml;
   }
 

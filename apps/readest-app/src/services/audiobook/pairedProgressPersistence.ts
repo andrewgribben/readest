@@ -16,7 +16,7 @@ import { md5 } from '@/utils/md5';
 import { makeAudiobookProgressSaver } from './progressPersistence';
 
 /** Resolve the same library identity used by the standalone provider opener. */
-export const pairedAudiobookEntry = (association: PairedAudiobook): Book | null => {
+export const pairedAudiobookEntry = (association: PairedAudiobook, create = true): Book | null => {
   const source = association.source;
   const path =
     source?.kind === 'audiobookshelf'
@@ -32,7 +32,7 @@ export const pairedAudiobookEntry = (association: PairedAudiobook): Book | null 
         ? book.filePath === path
         : association.files.some((file) => file.path === book.filePath)),
   );
-  if (existing || !path) return existing ?? null;
+  if (existing || !path || !create) return existing ?? null;
   const now = Date.now();
   const entry: Book = {
     hash: md5(path),

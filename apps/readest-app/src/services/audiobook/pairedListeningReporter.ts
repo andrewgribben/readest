@@ -24,6 +24,7 @@ export class PairedListeningReporter {
   #timer: ReturnType<typeof setInterval>;
   #closed = false;
   #started = false;
+  #hasCheckpoint = false;
   #lastPosition: number | null = null;
   #lastCapturedAt = 0;
   constructor(
@@ -32,7 +33,10 @@ export class PairedListeningReporter {
     private hooks: AudiobookProgressHooks & { onStart?: (position: number) => void },
   ) {
     this.#timer = setInterval(() => {
-      if (this.playing()) this.#report(this.hooks.onTick);
+      if (this.playing()) {
+        this.#hasCheckpoint = true;
+        this.#report(this.hooks.onTick);
+      }
     }, 15_000);
   }
   #report(callback?: (position: number, capturedAt?: number) => void) {
@@ -44,14 +48,18 @@ export class PairedListeningReporter {
     callback?.(position, this.#lastCapturedAt);
   }
   pause() {
+    if (!this.#hasCheckpoint && !this.playing()) return;
+    this.#hasCheckpoint = true;
     this.#report(this.hooks.onPause);
   }
   start() {
     if (this.#started || !this.playing() || this.position() === null) return;
     this.#started = true;
+    this.#hasCheckpoint = true;
     this.#report((position) => this.hooks.onStart?.(position));
   }
   seek(position?: number) {
+    this.#hasCheckpoint = true;
     if (position === undefined) this.#report(this.hooks.onSeek);
     else if (!this.#closed && Number.isFinite(position)) {
       this.#lastPosition = position;
@@ -66,6 +74,6 @@ export class PairedListeningReporter {
     const capturedAt = current === null ? this.#lastCapturedAt : Date.now();
     this.#closed = true;
     clearInterval(this.#timer);
-    if (position !== null) this.hooks.onEnd?.(position, capturedAt);
+    if (this.#hasCheckpoint && position !== null) this.hooks.onEnd?.(position, capturedAt);
   }
 }

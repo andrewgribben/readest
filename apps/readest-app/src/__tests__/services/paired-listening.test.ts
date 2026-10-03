@@ -7,6 +7,19 @@ import type { PairedAudiobook } from '@/types/book';
 
 describe('paired listening checkpoints', () => {
   afterEach(() => vi.useRealTimers());
+  it('does not save a prepared clock when playback was cancelled before starting', () => {
+    vi.useFakeTimers();
+    const hooks = { onPause: vi.fn(), onEnd: vi.fn() };
+    const reporter = new PairedListeningReporter(
+      () => false,
+      () => 90,
+      hooks,
+    );
+    reporter.pause();
+    reporter.close();
+    expect(hooks.onPause).not.toHaveBeenCalled();
+    expect(hooks.onEnd).not.toHaveBeenCalled();
+  });
   it('saves the recording clock, including preceding files, not the ebook section clock', () => {
     const pair = {
       files: [
@@ -78,6 +91,7 @@ describe('paired listening checkpoints', () => {
       () => position,
       hooks,
     );
+    reporter.seek();
     reporter.pause();
     position = null;
     vi.advanceTimersByTime(10_000);
