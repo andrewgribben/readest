@@ -50,16 +50,12 @@ import { findBookByOPDSSources, upsertOPDSSourceMapping } from '@/services/opds/
 import { applyOPDSCover, getOPDSCoverHref, getOPDSImageCacheFilename } from '@/services/opds/cover';
 import { applyOPDSMetadata, getOPDSBookMetadata } from '@/services/opds/metadata';
 import { buildPseStreamFileName } from '@/services/opds/pseStream';
-import { md5 } from '@/utils/md5';
-import { makeOpdsAudioFilePath, opdsAudioIdentity } from '@/services/opds/audiobook';
-import {
-  makeBookOrbitAudioFilePath,
-  matchBookOrbitAudiobook,
-} from '@/services/bookorbit/audiobookId';
+import { matchBookOrbitAudiobook } from '@/services/bookorbit/audiobookId';
 import { autoPairBookOrbitAudiobook, loadEbookChapterIds } from '@/services/bookorbit/autoPair';
 import { BookOrbitClient } from '@/services/bookorbit/client';
 import { pickAudioLinks } from '@/services/opds/audiobook';
 import type { OpdsAudioTrackLink } from '@/services/opds/audiobook';
+import { ensureOpdsAudiobookStub } from '@/services/opds/audiobookStub';
 import type { Book } from '@/types/book';
 import { FeedView } from './components/FeedView';
 import { PublicationView } from './components/PublicationView';
@@ -747,9 +743,9 @@ export default function BrowserPage() {
     [state.baseURL, catalogId, appService, libraryLoaded, router, _],
   );
 
-  // Audio entries are played from the catalog, never imported (#6224): the
-  // stub carries the acquisition links as its identity, the way an ABS stub
-  // carries `abs://<serverId>/<itemId>`.
+  // Audio entries are played from the catalog, never imported as files (#6224):
+  // the stub carries the acquisition links as its identity, the way an ABS
+  // stub carries `abs://<serverId>/<itemId>`.
   const handlePlayAudio = useCallback(
     async (tracks: OpdsAudioTrackLink[], title: string, author: string) => {
       if (!appService || !libraryLoaded) return;
@@ -758,59 +754,30 @@ export default function BrowserPage() {
           ...track,
           href: resolveURL(track.href, state.baseURL),
         }));
-        // When the catalog being browsed IS the BookOrbit configured for sync,
-        // its audiobook API serves the same book with chapters, byte ranges and
-        // a shared listening position — none of which OPDS can express (#6224).
-        const native = matchBookOrbitAudiobook(
-          resolved.map((track) => track.href),
-          settings.bookorbit ?? { serverUrl: '', password: '' },
-        );
-        const filePath = native
-          ? makeBookOrbitAudioFilePath(native.bookId)
-          : makeOpdsAudioFilePath({ catalogId, title, author, tracks: resolved });
         const { library, setLibrary } = useLibraryStore.getState();
-        // Hashed over the book's identity, not the whole filePath: that string
-        // also carries the title and author, so a catalog correcting either one
-        // would hash to a new row and strand the listening progress on the old
-        // one. The BookOrbit path is already just `bookorbit://<id>`.
-        const hash = md5(native ? filePath : opdsAudioIdentity(catalogId, resolved));
-        const now = Date.now();
-        const existing = library.find((b) => b.hash === hash);
-        if (!existing) {
-          const stub: Book = {
-            hash,
-            format: native ? 'BOOKORBIT' : 'OPDSAUDIO',
-            filePath,
-            title,
-            author,
-            sourceTitle: title,
-            createdAt: now,
-            updatedAt: now,
-            deletedAt: null,
-          };
-          // An audio stub has no file to extract artwork from, so the entry's
-          // own cover is the only one it will ever have — without it the
-          // player and the media session fall back to a placeholder. Best
-          // effort, exactly like the download path (#5270).
-          if (publicationCoverHref) {
-            try {
-              await applyOPDSCover({
-                appService,
-                book: stub,
-                coverUrl: resolveURL(publicationCoverHref, state.baseURL),
-                username: usernameRef.current || '',
-                password: passwordRef.current || '',
-                customHeaders: customHeadersRef.current,
-              });
-            } catch (coverError) {
-              console.warn('OPDS: failed to apply the feed cover:', coverError);
-            }
-          }
-          const newLibrary = [stub, ...library];
+        const { book, created } = await ensureOpdsAudiobookStub({
+          appService,
+          library,
+          catalogId,
+          title,
+          author,
+          tracks: resolved,
+          coverUrl: publicationCoverHref
+            ? resolveURL(publicationCoverHref, state.baseURL)
+            : undefined,
+          catalog: {
+            username: usernameRef.current || '',
+            password: passwordRef.current || '',
+            customHeaders: customHeadersRef.current,
+          },
+          bookorbit: settings.bookorbit,
+        });
+        if (created) {
+          const newLibrary = [book, ...library];
           setLibrary(newLibrary);
           await appService.saveLibraryBooks(newLibrary);
         }
-        router.push(`/player?id=${hash}`);
+        router.push(`/player?id=${book.hash}`);
       } catch (e) {
         console.error('Play error:', e);
         eventDispatcher.dispatch('toast', {

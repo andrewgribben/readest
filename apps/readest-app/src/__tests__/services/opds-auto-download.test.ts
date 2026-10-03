@@ -28,7 +28,7 @@ vi.mock('@/app/opds/utils/opdsReq', () => ({
 }));
 
 vi.mock('@/services/opds/feedChecker', () => ({
-  checkFeedForNewItems: vi.fn().mockResolvedValue([]),
+  checkFeedForNewItems: vi.fn().mockResolvedValue({ ebooks: [], audiobooks: [] }),
 }));
 
 vi.mock('@/services/opds/sourceMap', () => ({
@@ -129,7 +129,7 @@ describe('OPDS auto-download orchestrator', () => {
         baseURL: 'https://shelf.example.com/opds',
       },
     ];
-    vi.mocked(checkFeedForNewItems).mockResolvedValue(pendingItems);
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({ ebooks: pendingItems, audiobooks: [] });
 
     const result = await syncSubscribedCatalogs(catalogs, appService, []);
     expect(result.totalNewBooks).toBe(1);
@@ -157,15 +157,18 @@ describe('OPDS auto-download orchestrator', () => {
     const catalogs: OPDSCatalog[] = [
       { id: 'cat-1', name: 'Shelf', url: 'https://shelf.example.com/opds', autoDownload: true },
     ];
-    vi.mocked(checkFeedForNewItems).mockResolvedValue([
-      {
-        entryId: 'urn:shelf:1',
-        title: 'Issue 1',
-        acquisitionHref: '/dl/1.epub',
-        mimeType: 'application/epub+zip',
-        baseURL: 'https://shelf.example.com/opds',
-      },
-    ]);
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: [
+        {
+          entryId: 'urn:shelf:1',
+          title: 'Issue 1',
+          acquisitionHref: '/dl/1.epub',
+          mimeType: 'application/epub+zip',
+          baseURL: 'https://shelf.example.com/opds',
+        },
+      ],
+      audiobooks: [],
+    });
 
     await syncSubscribedCatalogs(catalogs, appService, []);
 
@@ -186,16 +189,19 @@ describe('OPDS auto-download orchestrator', () => {
         password: 'pass',
       },
     ];
-    vi.mocked(checkFeedForNewItems).mockResolvedValue([
-      {
-        entryId: 'urn:shelf:1',
-        title: 'Issue 1',
-        acquisitionHref: '/dl/1.epub',
-        coverHref: '/cwa/opds/cover/572',
-        mimeType: 'application/epub+zip',
-        baseURL: 'https://shelf.example.com/opds',
-      },
-    ]);
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: [
+        {
+          entryId: 'urn:shelf:1',
+          title: 'Issue 1',
+          acquisitionHref: '/dl/1.epub',
+          coverHref: '/cwa/opds/cover/572',
+          mimeType: 'application/epub+zip',
+          baseURL: 'https://shelf.example.com/opds',
+        },
+      ],
+      audiobooks: [],
+    });
 
     const result = await syncSubscribedCatalogs(catalogs, appService, []);
 
@@ -214,15 +220,18 @@ describe('OPDS auto-download orchestrator', () => {
     const catalogs: OPDSCatalog[] = [
       { id: 'cat-1', name: 'Shelf', url: 'https://shelf.example.com/opds', autoDownload: true },
     ];
-    vi.mocked(checkFeedForNewItems).mockResolvedValue([
-      {
-        entryId: 'urn:shelf:1',
-        title: 'Issue 1',
-        acquisitionHref: '/dl/1.epub',
-        mimeType: 'application/epub+zip',
-        baseURL: 'https://shelf.example.com/opds',
-      },
-    ]);
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: [
+        {
+          entryId: 'urn:shelf:1',
+          title: 'Issue 1',
+          acquisitionHref: '/dl/1.epub',
+          mimeType: 'application/epub+zip',
+          baseURL: 'https://shelf.example.com/opds',
+        },
+      ],
+      audiobooks: [],
+    });
 
     const result = await syncSubscribedCatalogs(catalogs, appService, []);
     expect(result.totalNewBooks).toBe(1);
@@ -233,16 +242,19 @@ describe('OPDS auto-download orchestrator', () => {
     const catalogs: OPDSCatalog[] = [
       { id: 'cat-1', name: 'Shelf', url: 'https://shelf.example.com/opds', autoDownload: true },
     ];
-    vi.mocked(checkFeedForNewItems).mockResolvedValue([
-      {
-        entryId: 'urn:shelf:1',
-        title: 'Issue 1',
-        acquisitionHref: '/dl/1.epub',
-        coverHref: '/cwa/opds/cover/572',
-        mimeType: 'application/epub+zip',
-        baseURL: 'https://shelf.example.com/opds',
-      },
-    ]);
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: [
+        {
+          entryId: 'urn:shelf:1',
+          title: 'Issue 1',
+          acquisitionHref: '/dl/1.epub',
+          coverHref: '/cwa/opds/cover/572',
+          mimeType: 'application/epub+zip',
+          baseURL: 'https://shelf.example.com/opds',
+        },
+      ],
+      audiobooks: [],
+    });
     vi.mocked(applyOPDSCover).mockRejectedValueOnce(new Error('cover server down'));
 
     const result = await syncSubscribedCatalogs(catalogs, appService, []);
@@ -254,15 +266,18 @@ describe('OPDS auto-download orchestrator', () => {
       { id: 'cat-1', name: 'Test', url: 'https://example.com/opds', autoDownload: true },
     ];
 
-    vi.mocked(checkFeedForNewItems).mockResolvedValue([
-      {
-        entryId: 'urn:fail:1',
-        title: 'Bad Book',
-        acquisitionHref: '/dl/bad.epub',
-        mimeType: 'application/epub+zip',
-        baseURL: 'https://example.com',
-      },
-    ]);
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: [
+        {
+          entryId: 'urn:fail:1',
+          title: 'Bad Book',
+          acquisitionHref: '/dl/bad.epub',
+          mimeType: 'application/epub+zip',
+          baseURL: 'https://example.com',
+        },
+      ],
+      audiobooks: [],
+    });
     (appService.importBook as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('corrupt file'),
     );
@@ -306,15 +321,18 @@ describe('OPDS auto-download orchestrator', () => {
 
     // The entry is still in the feed (not in knownEntryIds), so discovery
     // returns it again.
-    vi.mocked(checkFeedForNewItems).mockResolvedValue([
-      {
-        entryId: 'urn:backoff:1',
-        title: 'Backed-off Book',
-        acquisitionHref: '/dl/x.epub',
-        mimeType: 'application/epub+zip',
-        baseURL: 'https://example.com/opds',
-      },
-    ]);
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: [
+        {
+          entryId: 'urn:backoff:1',
+          title: 'Backed-off Book',
+          acquisitionHref: '/dl/x.epub',
+          mimeType: 'application/epub+zip',
+          baseURL: 'https://example.com/opds',
+        },
+      ],
+      audiobooks: [],
+    });
 
     await syncSubscribedCatalogs(catalogs, appService, []);
 
@@ -351,15 +369,18 @@ describe('OPDS auto-download orchestrator', () => {
       ],
     });
 
-    vi.mocked(checkFeedForNewItems).mockResolvedValue([
-      {
-        entryId: 'urn:dup:1',
-        title: 'Dup Book',
-        acquisitionHref: '/dl/dup.epub',
-        mimeType: 'application/epub+zip',
-        baseURL: 'https://example.com/opds',
-      },
-    ]);
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: [
+        {
+          entryId: 'urn:dup:1',
+          title: 'Dup Book',
+          acquisitionHref: '/dl/dup.epub',
+          mimeType: 'application/epub+zip',
+          baseURL: 'https://example.com/opds',
+        },
+      ],
+      audiobooks: [],
+    });
 
     await syncSubscribedCatalogs(catalogs, appService, []);
 
@@ -386,15 +407,18 @@ describe('OPDS auto-download orchestrator', () => {
     const catalogs: OPDSCatalog[] = [
       { id: 'cat-1', name: 'Shelf', url: 'https://shelf.example.com/opds', autoDownload: true },
     ];
-    vi.mocked(checkFeedForNewItems).mockResolvedValue([
-      {
-        entryId: 'urn:shelf:1',
-        title: 'Issue 1',
-        acquisitionHref: '/dl/1.epub',
-        mimeType: 'application/epub+zip',
-        baseURL: 'https://shelf.example.com/opds',
-      },
-    ]);
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: [
+        {
+          entryId: 'urn:shelf:1',
+          title: 'Issue 1',
+          acquisitionHref: '/dl/1.epub',
+          mimeType: 'application/epub+zip',
+          baseURL: 'https://shelf.example.com/opds',
+        },
+      ],
+      audiobooks: [],
+    });
 
     const callOrder: string[] = [];
     const onBooksImported = vi.fn(async (books: Book[]) => {
@@ -417,15 +441,18 @@ describe('OPDS auto-download orchestrator', () => {
     const catalogs: OPDSCatalog[] = [
       { id: 'cat-1', name: 'Shelf', url: 'https://shelf.example.com/opds', autoDownload: true },
     ];
-    vi.mocked(checkFeedForNewItems).mockResolvedValue([
-      {
-        entryId: 'urn:shelf:1',
-        title: 'Issue 1',
-        acquisitionHref: '/dl/1.epub',
-        mimeType: 'application/epub+zip',
-        baseURL: 'https://shelf.example.com/opds',
-      },
-    ]);
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: [
+        {
+          entryId: 'urn:shelf:1',
+          title: 'Issue 1',
+          acquisitionHref: '/dl/1.epub',
+          mimeType: 'application/epub+zip',
+          baseURL: 'https://shelf.example.com/opds',
+        },
+      ],
+      audiobooks: [],
+    });
 
     const onBooksImported = vi.fn(async () => {
       throw new Error('disk full');
@@ -460,7 +487,7 @@ describe('OPDS auto-download orchestrator', () => {
       mimeType: 'application/epub+zip',
       baseURL: 'https://shelf.example.com/opds',
     }));
-    vi.mocked(checkFeedForNewItems).mockResolvedValue(pendingItems);
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({ ebooks: pendingItems, audiobooks: [] });
 
     let completed = 0;
     const completedAtSave: number[] = [];
@@ -493,15 +520,16 @@ describe('OPDS auto-download orchestrator', () => {
     const catalogs: OPDSCatalog[] = [
       { id: 'cat-1', name: 'Shelf', url: 'https://shelf.example.com/opds', autoDownload: true },
     ];
-    vi.mocked(checkFeedForNewItems).mockResolvedValue(
-      Array.from({ length: PERSIST_BATCH_SIZE * 2 }, (_, i) => ({
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: Array.from({ length: PERSIST_BATCH_SIZE * 2 }, (_, i) => ({
         entryId: `urn:shelf:${i}`,
         title: `Book ${i}`,
         acquisitionHref: `/dl/${i}.epub`,
         mimeType: 'application/epub+zip',
         baseURL: 'https://shelf.example.com/opds',
       })),
-    );
+      audiobooks: [],
+    });
     vi.mocked(saveSubscriptionState).mockResolvedValue(undefined);
     const onBooksImported = vi
       .fn<(books: Book[]) => Promise<void>>()
@@ -540,15 +568,16 @@ describe('OPDS auto-download orchestrator', () => {
       { id: 'cat-1', name: 'Shelf', url: 'https://shelf.example.com/opds', autoDownload: true },
     ];
     // A full first batch of healthy entries pushes the retry item into the second.
-    vi.mocked(checkFeedForNewItems).mockResolvedValue(
-      Array.from({ length: PERSIST_BATCH_SIZE }, (_, i) => ({
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: Array.from({ length: PERSIST_BATCH_SIZE }, (_, i) => ({
         entryId: `urn:shelf:${i}`,
         title: `Book ${i}`,
         acquisitionHref: `/dl/${i}.epub`,
         mimeType: 'application/epub+zip',
         baseURL: 'https://shelf.example.com/opds',
       })),
-    );
+      audiobooks: [],
+    });
     vi.mocked(downloadFile).mockImplementation(async ({ url }) => {
       if (url?.includes('doomed.epub')) throw new Error('still unreachable');
       return { 'content-disposition': '' };
@@ -562,5 +591,93 @@ describe('OPDS auto-download orchestrator', () => {
     // Third strike: permanently skipped, not queued for a fourth attempt.
     expect(savedState.failedEntries.map((fe) => fe.entryId)).not.toContain('urn:shelf:doomed');
     expect(savedState.knownEntryIds).toContain('urn:shelf:doomed');
+  });
+
+  it('stubs OPDS audiobooks into the library without downloading audio files', async () => {
+    freshStatePerLoad();
+    const catalogs: OPDSCatalog[] = [
+      { id: 'cat-1', name: 'Shelf', url: 'https://shelf.example.com/opds', autoDownload: true },
+    ];
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: [],
+      audiobooks: [
+        {
+          entryId: 'urn:bookorbit:book:15959',
+          title: 'Warbreaker',
+          author: 'Brandon Sanderson',
+          tracks: [
+            {
+              href: '/api/v1/opds/15959/download?fileId=714',
+              mimeType: 'audio/mpeg',
+              title: 'MP3',
+            },
+          ],
+          baseURL: 'https://shelf.example.com/opds',
+        },
+      ],
+    });
+
+    const onBooksImported = vi.fn(async () => {});
+    const result = await syncSubscribedCatalogs(catalogs, appService, [], onBooksImported);
+
+    expect(result.totalNewBooks).toBe(1);
+    expect(result.newBooks[0]!.format).toBe('OPDSAUDIO');
+    expect(result.newBooks[0]!.title).toBe('Warbreaker');
+    expect(downloadFile).not.toHaveBeenCalled();
+    expect(onBooksImported).toHaveBeenCalledTimes(1);
+    const savedState = vi.mocked(saveSubscriptionState).mock.calls[0]![1] as OPDSSubscriptionState;
+    expect(savedState.knownEntryIds).toContain('urn:bookorbit:book:15959');
+  });
+
+  it('heals prior permanent skips of audiobooks instead of retrying importBook', async () => {
+    // Older builds downloaded audio as ebooks, failed importBook, and marked
+    // the entry known. Retries must not call downloadFile again.
+    vi.mocked(loadSubscriptionState).mockResolvedValue({
+      catalogId: 'cat-1',
+      lastCheckedAt: 0,
+      knownEntryIds: ['urn:bookorbit:book:15959'],
+      failedEntries: [
+        {
+          entryId: 'urn:bookorbit:book:15959',
+          href: '/api/v1/opds/15959/download?fileId=714',
+          title: 'Warbreaker',
+          attempts: MAX_RETRY_ATTEMPTS - 1,
+          lastAttemptAt: 0,
+        },
+      ],
+    });
+    const catalogs: OPDSCatalog[] = [
+      { id: 'cat-1', name: 'Shelf', url: 'https://shelf.example.com/opds', autoDownload: true },
+    ];
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: [],
+      audiobooks: [
+        {
+          entryId: 'urn:bookorbit:book:15959',
+          title: 'Warbreaker',
+          author: 'Brandon Sanderson',
+          tracks: [
+            {
+              href: '/api/v1/opds/15959/download?fileId=714',
+              mimeType: 'audio/mpeg',
+              title: 'MP3',
+            },
+          ],
+          baseURL: 'https://shelf.example.com/opds',
+        },
+      ],
+    });
+
+    const result = await syncSubscribedCatalogs(catalogs, appService, []);
+
+    expect(result.totalNewBooks).toBe(1);
+    expect(result.newBooks[0]!.format).toBe('OPDSAUDIO');
+    expect(downloadFile).not.toHaveBeenCalled();
+    const savedState = vi
+      .mocked(saveSubscriptionState)
+      .mock.calls.at(-1)![1] as OPDSSubscriptionState;
+    expect(savedState.failedEntries.map((fe) => fe.entryId)).not.toContain(
+      'urn:bookorbit:book:15959',
+    );
   });
 });
