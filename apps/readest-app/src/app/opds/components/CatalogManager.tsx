@@ -39,6 +39,7 @@ import { useEnv } from '@/context/EnvContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { isWebAppPlatform } from '@/services/environment';
 import { useCustomOPDSStore } from '@/store/customOPDSStore';
+import { useOPDSProgressStore } from '@/store/opdsProgressStore';
 import { ensurePassphraseUnlocked } from '@/services/sync/passphraseGate';
 import { isCredentialsSyncEnabled } from '@/services/sync/syncCategories';
 import { isSyncError } from '@/libs/errors';
@@ -46,7 +47,11 @@ import { OPDSCatalog } from '@/types/opds';
 import { isLanAddress } from '@/utils/network';
 import { eventDispatcher } from '@/utils/event';
 import { SectionTitle } from '@/components/settings/primitives';
-import { deleteSubscriptionState, loadSubscriptionState } from '@/services/opds';
+import {
+  deleteSubscriptionState,
+  loadSubscriptionState,
+  refreshCatalogLibrary,
+} from '@/services/opds';
 import type { OPDSSubscriptionState } from '@/services/opds/types';
 import { getUnaddedPopularCatalogs, validateOPDSURL } from '../utils/opdsUtils';
 import { FailedDownloadsDialog } from './FailedDownloadsDialog';
@@ -56,6 +61,7 @@ import {
   parseCustomHeadersInput,
 } from '@/utils/customHeaders';
 import ModalPortal from '@/components/ModalPortal';
+import { useLibraryStore } from '@/store/libraryStore';
 
 const POPULAR_CATALOGS: OPDSCatalog[] = [
   {
@@ -128,6 +134,9 @@ interface CatalogCardProps {
   /** Opens the confirmation alert rather than flipping the switch (#5746). */
   onRequestToggleAutoDownload: (id: string) => void;
   onShowFailed: (id: string) => void;
+  onUpdateLibrary: (catalog: OPDSCatalog) => void;
+  updateProgress: string;
+  isUpdating: boolean;
 }
 
 /**
@@ -143,8 +152,12 @@ function CatalogCard({
   onRemove,
   onRequestToggleAutoDownload,
   onShowFailed,
+  onUpdateLibrary,
+  updateProgress,
+  isUpdating,
 }: CatalogCardProps) {
   const _ = useTranslation();
+  const transferProgress = useOPDSProgressStore((state) => state.catalogs[catalog.id]);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: catalog.id,
     disabled: !reorderable,
@@ -238,8 +251,16 @@ function CatalogCard({
               buttonClassName='text-base-content/55 hover:bg-base-200 hover:text-base-content focus-visible:ring-base-content/15 flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-150 focus-visible:outline-hidden focus-visible:ring-2'
               toggleButton={<IoEllipsisVertical className='h-4 w-4' />}
             >
-              <Menu className='dropdown-content no-triangle border-base-300 z-20 mt-1 min-w-[8rem] rounded-lg border shadow-lg'>
+              <Menu className='dropdown-content no-triangle border-base-300 z-20 mt-1 min-w-[10rem] rounded-lg border shadow-lg'>
                 <MenuItem noIcon transient label={_('Edit')} onClick={() => onEdit(catalog)} />
+                <MenuItem
+                  noIcon
+                  transient
+                  label={_('Update library')}
+                  description={isUpdating ? updateProgress : undefined}
+                  disabled={catalog.disabled || isUpdating || !!transferProgress}
+                  onClick={() => onUpdateLibrary(catalog)}
+                />
                 <MenuItem
                   noIcon
                   transient
@@ -326,6 +347,51 @@ function CatalogCard({
               <>&nbsp;</>
             )}
           </span>
+          {transferProgress && (
+            <div
+              role='status'
+              aria-live='off'
+              className='text-base-content/80 mt-2 flex flex-col gap-1.5 text-xs'
+            >
+              <span>
+                {transferProgress.phase === 'discovering'
+                  ? _('Checking catalog...')
+                  : transferProgress.mode === 'update-library'
+                    ? _('{{current}} of {{total}} checked · {{downloaded}} downloaded', {
+                        current: transferProgress.checked,
+                        total: transferProgress.toCheck,
+                        downloaded: transferProgress.completed,
+                      })
+                    : transferProgress.total > 0
+                      ? _('{{current}} of {{total}} downloaded', {
+                          current: transferProgress.completed,
+                          total: transferProgress.total,
+                        })
+                      : _('Syncing catalog...')}
+              </span>
+              {transferProgress.active.map((file) => (
+                <div key={file.id} className='flex flex-col gap-1'>
+                  <div className='flex items-center justify-between gap-2'>
+                    <span className='truncate' title={file.title}>
+                      {file.title}
+                    </span>
+                    <span className='shrink-0 tabular-nums'>
+                      {file.percent === null ? _('Downloading...') : `${file.percent}%`}
+                    </span>
+                  </div>
+                  <progress
+                    aria-label={file.title}
+                    max={100}
+                    value={file.percent ?? undefined}
+                    className='eink-bordered h-1.5 w-full accent-current'
+                  />
+                </div>
+              ))}
+              {transferProgress.failed > 0 && (
+                <span>{_('{{count}} failed', { count: transferProgress.failed })}</span>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -391,6 +457,9 @@ export function CatalogManager({ inSubPage = false }: CatalogManagerProps = {}) 
   const confirmAutoDownloadCatalog = confirmAutoDownloadId
     ? catalogs.find((c) => c.id === confirmAutoDownloadId)
     : undefined;
+  const [updatingCatalogId, setUpdatingCatalogId] = useState<string | null>(null);
+  const [updateProgress, setUpdateProgress] = useState('');
+  const setLibrary = useLibraryStore((s) => s.setLibrary);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -592,6 +661,60 @@ export function CatalogManager({ inSubPage = false }: CatalogManagerProps = {}) 
     }
   };
 
+  const handleUpdateLibrary = (catalog: OPDSCatalog) => {
+    if (!appService || updatingCatalogId) return;
+    setUpdatingCatalogId(catalog.id);
+    setUpdateProgress(_('Loading...'));
+    void (async () => {
+      try {
+        const library = await appService.loadLibraryBooks();
+        const result = await refreshCatalogLibrary({
+          catalog,
+          appService,
+          library,
+          onProgress: ({ current, total, title }) => {
+            setUpdateProgress(`${current} / ${total}: ${title}`);
+          },
+          onLibraryDirty: async (books) => {
+            setLibrary(books);
+            await appService.saveLibraryBooks(books);
+          },
+        });
+        setLibrary(library);
+        await appService.saveLibraryBooks(library);
+        eventDispatcher.dispatch('opds-sync-complete');
+        const summary = _(
+          '{{updated}} updated · {{redownloaded}} re-downloaded · {{failed}} failed',
+          {
+            updated: result.metadataUpdated,
+            redownloaded: result.redownloaded,
+            failed: result.failed,
+          },
+        );
+        setUpdateProgress(summary);
+        eventDispatcher.dispatch('toast', {
+          type: result.failed > 0 ? 'warning' : 'success',
+          message: _('{{name}}: {{summary}}', { name: catalog.name, summary }),
+          timeout: 5000,
+        });
+        await reloadSubscriptionStates();
+      } catch (error) {
+        console.error('[OPDS] update library failed:', error);
+        setUpdateProgress(_('Update failed'));
+        eventDispatcher.dispatch('toast', {
+          type: 'error',
+          message: _('Failed to update library for {{name}}', { name: catalog.name }),
+          timeout: 5000,
+        });
+      } finally {
+        setTimeout(() => {
+          setUpdatingCatalogId(null);
+          setUpdateProgress('');
+        }, 2500);
+      }
+    })();
+  };
+
   // Per-catalog pending timeouts for the debounced auto-download trigger.
   // Each catalog's enable schedules its own timer; toggling off cancels just
   // that catalog's pending dispatch (other catalogs' timers are untouched).
@@ -724,6 +847,9 @@ export function CatalogManager({ inSubPage = false }: CatalogManagerProps = {}) 
                     onRemove={handleRemoveCatalog}
                     onRequestToggleAutoDownload={setConfirmAutoDownloadId}
                     onShowFailed={setFailedDialogCatalogId}
+                    onUpdateLibrary={handleUpdateLibrary}
+                    updateProgress={updatingCatalogId === catalog.id ? updateProgress : ''}
+                    isUpdating={updatingCatalogId === catalog.id}
                   />
                 ))}
               </div>
