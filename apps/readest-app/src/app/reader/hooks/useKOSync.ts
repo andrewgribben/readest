@@ -368,7 +368,10 @@ export const useKOSync = (bookKey: string, provider: KosyncProgressProvider = ko
 
       setSyncState('checking');
       const remoteProgress = await kosyncClient.getProgress(book);
-      if (!remoteProgress || !remoteProgress.progress) {
+      if (
+        !remoteProgress ||
+        (!remoteProgress.progress && getRemoteFraction(remoteProgress) === undefined)
+      ) {
         setSyncState('synced');
         return;
       }
