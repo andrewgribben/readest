@@ -335,7 +335,7 @@ export class TTSMediaBridge {
     // action instead.
     mediaSession.setActionHandler('play', () => {
       const ctrl = controller();
-      if (ctrl?.state.includes('paused')) void ctrl.start();
+      if (ctrl && !ctrl.terminated && ctrl.state !== 'playing') void ctrl.start();
     });
     mediaSession.setActionHandler('pause', () => {
       const ctrl = controller();
@@ -356,11 +356,13 @@ export class TTSMediaBridge {
     mediaSession.setActionHandler('seekbackward', () => void controller()?.backward(true));
     mediaSession.setActionHandler('nexttrack', () => {
       this.#beginSkip();
-      void controller()?.forward();
+      const ctrl = controller();
+      void ctrl?.forward(ctrl.kind === 'audiobook' || ctrl.recordedAudio === true);
     });
     mediaSession.setActionHandler('previoustrack', () => {
       this.#beginSkip();
-      void controller()?.backward();
+      const ctrl = controller();
+      void ctrl?.backward(ctrl.kind === 'audiobook' || ctrl.recordedAudio === true);
     });
     if (mediaSession instanceof TauriMediaSession) {
       mediaSession.setActionHandler('seekto', ((positionMs: number) => {
