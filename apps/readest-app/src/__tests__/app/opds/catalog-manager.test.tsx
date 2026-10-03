@@ -8,6 +8,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { eventDispatcher } from '@/utils/event';
 import type { OPDSCatalog } from '@/types/opds';
 import type { SystemSettings } from '@/types/settings';
+import { useOPDSProgressStore } from '@/store/opdsProgressStore';
 
 // Simple interpolating stub so assertions can match the rendered copy
 // (including the catalog name) instead of raw i18n keys.
@@ -64,8 +65,40 @@ const seed = (catalogs: OPDSCatalog[]) => {
 const autoDownloadToggle = () => screen.getByRole('checkbox', { name: 'Auto-download' });
 
 beforeEach(() => {
+  useOPDSProgressStore.setState({ catalogs: {} });
   vi.clearAllMocks();
   vi.useFakeTimers({ shouldAdvanceTime: true });
+});
+
+describe('per-catalog download progress', () => {
+  test('shows names, percentages and counts only on the active catalog', () => {
+    seed([
+      makeCatalog({ name: 'Active', autoDownload: true }),
+      makeCatalog({ id: 'c2', contentId: 'c2', name: 'Idle' }),
+    ]);
+    const progress = useOPDSProgressStore.getState();
+    progress.begin('c1', 'auto-download');
+    progress.patch('c1', { phase: 'processing', completed: 1, total: 4 });
+    progress.fileProgress('c1', 'a', 'Downloading Title', { progress: 25, total: 100 });
+    progress.fileProgress('c1', 'b', 'Unknown Size', { progress: 10, total: 0 });
+    render(<CatalogManager />);
+    expect(screen.getByText('1 of 4 downloaded')).toBeTruthy();
+    expect(screen.getByText('Downloading Title')).toBeTruthy();
+    expect(screen.getByText('25%')).toBeTruthy();
+    expect(screen.getAllByRole('progressbar')).toHaveLength(2);
+    expect(screen.getByRole('progressbar', { name: 'Unknown Size' }).hasAttribute('value')).toBe(
+      false,
+    );
+    expect(
+      screen.getByText('Idle').closest('[role="button"]')?.querySelector('[role="status"]'),
+    ).toBeNull();
+  });
+
+  test('does not leave an indicator on idle catalogs', () => {
+    seed([makeCatalog({ autoDownload: true })]);
+    render(<CatalogManager />);
+    expect(screen.queryByRole('progressbar')).toBeNull();
+  });
 });
 
 afterEach(() => {
