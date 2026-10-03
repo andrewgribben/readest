@@ -283,7 +283,7 @@ const BookItem: React.FC<BookItemProps> = ({
                 <LiaHeadphonesSolid size={iconSize15} />
               </div>
             )}
-            {book.absDownloadedAt && (
+            {(book.absDownloadedAt || book.opdsDownloadedAt) && (
               <div
                 className='pt-0.5 sm:pt-px'
                 title={_('Available Offline')}

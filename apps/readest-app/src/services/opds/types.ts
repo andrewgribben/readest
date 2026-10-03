@@ -1,4 +1,5 @@
 import type { Book } from '@/types/book';
+import type { OpdsAudioTrackLink } from './audiobook';
 import type { OPDSBookMetadata } from './metadata';
 
 // --- Constants ---
@@ -40,6 +41,26 @@ export interface PendingItem {
   mimeType: string;
   updated?: string;
   baseURL: string;
+}
+
+/** Audio-only (or audio-bearing) feed entry to materialize as a streaming stub. */
+export interface PendingAudioItem {
+  entryId: string;
+  title: string;
+  author: string;
+  /** Cover advertised by the entry (#5270). */
+  coverHref?: string;
+  metadata?: OPDSBookMetadata;
+  /** Audio acquisition links in feed order; hrefs are still feed-relative. */
+  tracks: OpdsAudioTrackLink[];
+  updated?: string;
+  baseURL: string;
+}
+
+/** Result of crawling a catalog for new ebook downloads and audiobook stubs. */
+export interface CatalogDiscovery {
+  ebooks: PendingItem[];
+  audiobooks: PendingAudioItem[];
 }
 
 export interface FailedEntry {

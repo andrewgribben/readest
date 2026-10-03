@@ -7,8 +7,7 @@
 import type { ABSClient } from '@/services/audiobookshelf/client';
 import type { AudiobookProgressHooks } from '@/services/audiobook/AudiobookController';
 import type { AppService } from '@/types/system';
-import type { Book } from '@/types/book';
-import { useLibraryStore } from '@/store/libraryStore';
+import { makeAudiobookProgressSaver } from '@/services/audiobook/progressPersistence';
 
 // Mirrors TTSSessionManager's PERSIST_THROTTLE_MS pattern: the in-memory
 // library store is updated on every hook so the UI stays current, but the
@@ -108,8 +107,8 @@ export class AbsProgressSyncer {
   #appService: AppService;
   #sessionId: string | null = null;
   #lastSyncedPosition = 0;
-  #lastPersistAt = 0;
   #closed = false;
+  #cacheEnabled: boolean;
 
   constructor(input: {
     client: ABSClient;
@@ -118,6 +117,7 @@ export class AbsProgressSyncer {
     bookHash: string;
     duration: number;
     appService: AppService;
+    cacheLocally?: boolean;
   }) {
     this.#client = input.client;
     this.#itemId = input.itemId;
@@ -125,6 +125,7 @@ export class AbsProgressSyncer {
     this.#bookHash = input.bookHash;
     this.#duration = input.duration;
     this.#appService = input.appService;
+    this.#cacheEnabled = input.cacheLocally !== false;
   }
 
   /** Open the server listening session; returns the resume position honoring resolveResumePosition. */
@@ -153,6 +154,20 @@ export class AbsProgressSyncer {
     });
     this.#lastSyncedPosition = resume;
     return resume;
+  }
+
+  /** Open reporting without selecting a remote resume position for paired playback. */
+  async beginReporting(position: number): Promise<void> {
+    this.#lastSyncedPosition = position;
+    const session = await this.#client.openPlaybackSession(this.#itemId, this.#episodeId);
+    this.#sessionId = session.id;
+    const payload = {
+      currentTime: this.#lastSyncedPosition,
+      timeListened: 0,
+      duration: this.#duration,
+    };
+    if (this.#closed) await this.#client.closeSession(session.id, payload).catch(console.warn);
+    else await this.#client.syncSession(session.id, payload).catch(console.warn);
   }
 
   /** Wire into AudiobookController: returns hooks that sync + cache locally. */
@@ -212,27 +227,16 @@ export class AbsProgressSyncer {
   // `force` bypasses the throttle for the points where a dropped write would
   // regress the resume position (pause, end) rather than just being a stale
   // intermediate tick.
+  #saveProgress?: (position: number, force: boolean) => void;
   #cacheLocally(pos: number, force: boolean): void {
-    const { library, setLibrary } = useLibraryStore.getState();
-    const idx = library.findIndex((b) => b.hash === this.#bookHash);
-    if (idx !== -1) {
-      const book = library[idx]!;
-      const now = Date.now();
-      const progress: [number, number] = [Math.round(pos), Math.round(this.#duration)];
-      // Bump updatedAt so Date Read sorting reflects listening activity, the
-      // same way the reader's progress saves do for regular books. Reconcile
-      // never compares updatedAt, so this cannot cause sync churn.
-      const updatedBook: Book = { ...book, progress, updatedAt: now };
-      const newLibrary = library.slice();
-      newLibrary[idx] = updatedBook;
-      setLibrary(newLibrary);
-
-      if (force || now - this.#lastPersistAt >= PERSIST_THROTTLE_MS) {
-        this.#lastPersistAt = now;
-        Promise.resolve(this.#appService.saveLibraryBooks(newLibrary)).catch(console.warn);
-      }
-    }
-
-    writeLocalLastPlayedAt(this.#bookHash, Date.now(), this.#episodeId);
+    if (!this.#cacheEnabled) return;
+    this.#saveProgress ??= makeAudiobookProgressSaver(
+      this.#appService,
+      this.#bookHash,
+      this.#duration,
+      PERSIST_THROTTLE_MS,
+      (timestamp) => writeLocalLastPlayedAt(this.#bookHash, timestamp, this.#episodeId),
+    );
+    this.#saveProgress(pos, force);
   }
 }

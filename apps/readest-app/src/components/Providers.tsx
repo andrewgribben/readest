@@ -38,6 +38,7 @@ import { CommandPaletteProvider, CommandPalette } from '@/components/command-pal
 import AtmosphereOverlay from '@/components/AtmosphereOverlay';
 import AppLockScreen from '@/components/AppLockScreen';
 import CarMediaLibraryBridge from '@/components/CarMediaLibraryBridge';
+import AudioPositionChoiceDialog from '@/components/AudioPositionChoiceDialog';
 import FileSyncReport from '@/components/FileSyncReport';
 import AppLockDialog from '@/components/settings/AppLockDialog';
 import PassphrasePrompt from '@/components/PassphrasePrompt';
@@ -243,6 +244,7 @@ const Providers = ({ children }: { children: React.ReactNode }) => {
   return (
     <CSPostHogProvider>
       <CarMediaLibraryBridge />
+      <AudioPositionChoiceDialog />
       <AuthProvider>
         <IconContext.Provider value={{ size: `${iconSize}px` }}>
           <SyncProvider>

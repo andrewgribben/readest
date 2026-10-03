@@ -230,6 +230,18 @@ describe('listPairableAbsBooks', () => {
       make({ hash: 'gone', deletedAt: 1, title: 'Deleted' }),
       make({ hash: 'orphan', filePath: makeAbsFilePath('missing', 'item9'), title: 'Orphan' }),
       make({ hash: 'a', title: 'Alpha' }),
+      make({
+        hash: 'opds',
+        format: 'OPDSAUDIO',
+        filePath: 'opdsaudio://%7B%7D',
+        title: 'OPDS Stub',
+      }),
+      make({
+        hash: 'bo',
+        format: 'BOOKORBIT',
+        filePath: 'bookorbit://8',
+        title: 'BookOrbit Stub',
+      }),
     ];
 
     expect(listPairableAbsBooks(library).map((book) => book.hash)).toEqual(['a', 'b']);

@@ -115,7 +115,7 @@ describe('checkFeedForNewItems directory crawl (#4272)', () => {
       ),
     );
 
-    const items = await checkFeedForNewItems(makeCatalog(), emptyState());
+    const { ebooks: items } = await checkFeedForNewItems(makeCatalog(), emptyState());
 
     const ids = items.map((i) => i.entryId);
     expect(ids).toContain('urn:uuid:rosie');
@@ -139,7 +139,7 @@ describe('checkFeedForNewItems directory crawl (#4272)', () => {
       bookEntry('urn:uuid:beaty-1', 'Beaty.epub', '/books/Kids/Beaty/Beaty.epub?dl'),
     );
 
-    const items = await checkFeedForNewItems(makeCatalog(), emptyState());
+    const { ebooks: items } = await checkFeedForNewItems(makeCatalog(), emptyState());
     expect(items.map((i) => i.entryId).sort()).toEqual(['urn:uuid:beaty-1', 'urn:uuid:ramona-1']);
   });
 
@@ -156,7 +156,7 @@ describe('checkFeedForNewItems directory crawl (#4272)', () => {
       bookEntry('urn:uuid:extra-1', 'Extra.epub', '/books/Kids/Ramona/Extras/Extra.epub?dl'),
     );
 
-    const items = await checkFeedForNewItems(makeCatalog(), emptyState());
+    const { ebooks: items } = await checkFeedForNewItems(makeCatalog(), emptyState());
     expect(items.map((i) => i.entryId).sort()).toEqual(['urn:uuid:extra-1', 'urn:uuid:ramona-1']);
   });
 
@@ -180,7 +180,7 @@ describe('checkFeedForNewItems directory crawl (#4272)', () => {
     );
 
     const catalog: OPDSCatalog = { id: 'cat-1', name: 'Library', url: ROOT };
-    const items = await checkFeedForNewItems(catalog, emptyState());
+    const { ebooks: items } = await checkFeedForNewItems(catalog, emptyState());
 
     expect(items.map((i) => i.entryId)).toEqual(['urn:uuid:new-1']);
     const fetchedURLs = vi.mocked(fetchWithAuth).mock.calls.map((c) => c[0]);
@@ -204,7 +204,7 @@ describe('checkFeedForNewItems directory crawl (#4272)', () => {
     );
 
     const catalog: OPDSCatalog = { id: 'cat-1', name: 'Library', url: ROOT };
-    const items = await checkFeedForNewItems(catalog, emptyState());
+    const { ebooks: items } = await checkFeedForNewItems(catalog, emptyState());
 
     expect(items.map((i) => i.entryId)).toEqual(['urn:uuid:root-1']);
     const fetchedURLs = vi.mocked(fetchWithAuth).mock.calls.map((c) => c[0]);
@@ -224,7 +224,7 @@ describe('checkFeedForNewItems directory crawl (#4272)', () => {
       );
     }
 
-    const items = await checkFeedForNewItems(makeCatalog(), emptyState());
+    const { ebooks: items } = await checkFeedForNewItems(makeCatalog(), emptyState());
     const ids = items.map((i) => i.entryId);
     expect(ids).toContain(`urn:uuid:book-${MAX_CRAWL_DEPTH}`);
     expect(ids).not.toContain(`urn:uuid:book-${MAX_CRAWL_DEPTH + 1}`);
@@ -243,7 +243,7 @@ describe('checkFeedForNewItems directory crawl (#4272)', () => {
     }
     feeds[BASE] = feedXML('Kids', rootBody);
 
-    const items = await checkFeedForNewItems(makeCatalog(), emptyState());
+    const { ebooks: items } = await checkFeedForNewItems(makeCatalog(), emptyState());
     expect(vi.mocked(fetchWithAuth).mock.calls.length).toBeLessThanOrEqual(MAX_FEEDS_PER_CRAWL);
     // Root fetch consumes one slot from the budget.
     expect(items).toHaveLength(MAX_FEEDS_PER_CRAWL - 1);
@@ -261,7 +261,7 @@ describe('checkFeedForNewItems directory crawl (#4272)', () => {
         bookEntry('urn:uuid:ramona-1', 'Ramona.epub', '/dl/ramona.epub'),
     );
 
-    const items = await checkFeedForNewItems(makeCatalog(), emptyState());
+    const { ebooks: items } = await checkFeedForNewItems(makeCatalog(), emptyState());
     expect(items.map((i) => i.entryId).sort()).toEqual(['urn:uuid:ramona-1', 'urn:uuid:rosie']);
     // Root fetched exactly once.
     const rootFetches = vi.mocked(fetchWithAuth).mock.calls.filter((c) => c[0] === BASE);
@@ -276,7 +276,7 @@ describe('checkFeedForNewItems directory crawl (#4272)', () => {
     );
     feeds[RAMONA_URL] = feedXML('Ramona', bookEntry('urn:uuid:dup', 'Dup.epub', '/dl/dup.epub'));
 
-    const items = await checkFeedForNewItems(makeCatalog(), emptyState());
+    const { ebooks: items } = await checkFeedForNewItems(makeCatalog(), emptyState());
     expect(items.filter((i) => i.entryId === 'urn:uuid:dup')).toHaveLength(1);
   });
 
@@ -289,7 +289,7 @@ describe('checkFeedForNewItems directory crawl (#4272)', () => {
     );
 
     const state = { ...emptyState(), knownEntryIds: ['urn:uuid:known'] };
-    const items = await checkFeedForNewItems(makeCatalog(), state);
+    const { ebooks: items } = await checkFeedForNewItems(makeCatalog(), state);
     expect(items.map((i) => i.entryId)).toEqual(['urn:uuid:fresh']);
   });
 
@@ -303,7 +303,7 @@ describe('checkFeedForNewItems directory crawl (#4272)', () => {
     );
     feeds[PAGE2] = feedXML('Ramona p2', bookEntry('urn:uuid:p2', 'Page2.epub', '/dl/p2.epub'));
 
-    const items = await checkFeedForNewItems(makeCatalog(), emptyState());
+    const { ebooks: items } = await checkFeedForNewItems(makeCatalog(), emptyState());
     expect(items.map((i) => i.entryId).sort()).toEqual(['urn:uuid:p1', 'urn:uuid:p2']);
   });
 });

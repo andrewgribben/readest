@@ -171,6 +171,9 @@ export interface Book {
   // (audio tracks, or an ebook-only item's file). Device-local like
   // `downloadedAt`: the files exist only here, so it never syncs.
   absDownloadedAt?: number | null;
+  // When this device finished downloading an OPDS / BookOrbit audiobook for
+  // offline use. Device-local like `absDownloadedAt`.
+  opdsDownloadedAt?: number | null;
 
   metadata?: BookMetadata;
   // Field-level LWW timestamp for the metadata group (title, author, tags,
@@ -759,15 +762,41 @@ export interface PairedAudiobookBookOrbitSource {
   }[];
 }
 
+/**
+ * An audiobook streamed from a generic OPDS catalog (`OPDSAUDIO`). OPDS has no
+ * chapter table, so chapters fall back to one-per-track; the packed catalog
+ * id and track hrefs travel with the association the same way the ABS and
+ * BookOrbit variants carry their server identifiers.
+ */
+export interface PairedAudiobookOpdsSource {
+  kind: 'opds';
+  catalogId: string;
+  tracks: {
+    index: number;
+    startOffset: number; // global seconds
+    duration: number; // seconds
+    contentUrl: string; // absolute acquisition href
+    mimeType: string;
+    title?: string;
+  }[];
+}
+
+export type PairedAudiobookSource =
+  | PairedAudiobookAbsSource
+  | PairedAudiobookBookOrbitSource
+  | PairedAudiobookOpdsSource;
+
 export interface PairedAudiobook {
   version: 1;
+  /** Actual recording position, device-local; never inferred from ebook progress. */
+  listeningProgress?: { position: number; duration: number; updatedAt: number };
   title?: string;
   narrator?: string;
   files: AudiobookFile[];
   chapters: AudiobookChapter[];
   mappings: AudiobookChapterMapping[];
   createdAt: number;
-  source?: PairedAudiobookAbsSource | PairedAudiobookBookOrbitSource;
+  source?: PairedAudiobookSource;
 }
 
 export interface BookDataRecord {

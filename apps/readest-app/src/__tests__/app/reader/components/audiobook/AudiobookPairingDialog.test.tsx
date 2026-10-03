@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -32,6 +32,8 @@ const h = vi.hoisted(() => {
     createdAt: 1,
   };
   return {
+    downloaded: false,
+    appService: { loadLibraryBooks: async () => [] },
     association,
     config: { audiobook: association as PairedAudiobook | undefined, updatedAt: 1 },
     book: { hash: 'book-hash', title: 'A Very Good Book', format: 'EPUB' },
@@ -55,7 +57,15 @@ vi.mock('@/hooks/useTranslation', () => ({
 }));
 
 vi.mock('@/context/EnvContext', () => ({
-  useEnv: () => ({ appService: null, envConfig: {} }),
+  useEnv: () => ({ appService: h.downloaded ? h.appService : null, envConfig: {} }),
+}));
+vi.mock('@/services/opds/pairedOffline', () => ({
+  resolveDownloadedOpdsPairing: async () => (h.downloaded ? { tracks: [] } : null),
+}));
+vi.mock('@/services/audiobook/preview', () => ({
+  AudiobookPreviewPlayer: class {
+    dispose() {}
+  },
 }));
 
 vi.mock('@/hooks/useFileSelector', () => ({
@@ -96,7 +106,16 @@ const bookDoc = {
 
 describe('AudiobookPairingDialog', () => {
   beforeEach(() => {
+    h.downloaded = false;
     h.config.audiobook = h.association;
+  });
+
+  it('labels a valid downloaded BookOrbit pairing as downloaded', async () => {
+    h.downloaded = true;
+    h.config.audiobook = { ...h.association, source: { kind: 'bookorbit', bookId: 7, tracks: [] } };
+    render(<AudiobookPairingDialog bookKey='book-hash-view' bookDoc={bookDoc} onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(/Downloaded from BookOrbit/)).toBeTruthy());
+    expect(screen.queryByText(/Streamed from BookOrbit/)).toBeNull();
   });
 
   it('identifies the ebook on the first pairing step', () => {

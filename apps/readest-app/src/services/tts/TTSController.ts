@@ -1,6 +1,7 @@
 import { FoliateView, ViewTTS } from '@/types/view';
 import { AppService } from '@/types/system';
 import type { PageInfo, PairedAudiobook } from '@/types/book';
+import { selectListeningCheckpoint } from '@/services/audiobook/startPosition';
 import { SectionItem } from '@/libs/document';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { transformTTSSectionDocument } from './transformDoc';
@@ -43,12 +44,17 @@ import {
 } from './mediaOverlay';
 import {
   adjacentAudioChapter,
+  pairedChapterEntries,
   findPairedAudiobookSection,
   loadPairedAudiobookSection,
   narratedAudioChapters,
   type NarratedAudioChapter,
 } from './pairedAudiobook';
 import { SKIP_BACKWARD_SEC, SKIP_FORWARD_SEC } from '@/services/playback/playbackSource';
+import {
+  PairedListeningReporter,
+  pairedListeningPosition,
+} from '@/services/audiobook/pairedListeningReporter';
 import {
   stripInlineReadingAnnotations,
   stripInlineReadingAnnotationsFromSSML,
@@ -188,6 +194,8 @@ export class TTSController extends EventTarget {
   #mediaOverlaySection: MediaOverlaySection | null = null;
   #useNarration = true;
   #pairedAudiobook: PairedAudiobook | null = null;
+  #pairedListening: PairedListeningReporter | null = null;
+  #pairedSeekPosition: { position: number; duration: number } | null = null;
 
   ttsLang: string = '';
   ttsRate: number = 1.0;
@@ -259,6 +267,7 @@ export class TTSController extends EventTarget {
 
   #terminate(reason: 'ended' | 'error') {
     if (this.#terminated) return;
+    this.#pairedListening?.close();
     this.#terminated = true;
     stopAudioKeepAlive();
     queueMicrotask(() => {
@@ -431,6 +440,16 @@ export class TTSController extends EventTarget {
         this.ttsClient = this.ttsMediaOverlayClient;
       }
     }
+    if (this.#pairedAudiobook && this.appService && this.bookKey) {
+      const { createPairedProgressHooks } = await import(
+        '@/services/audiobook/pairedProgressPersistence'
+      );
+      this.#pairedListening = new PairedListeningReporter(
+        () => this.state === 'playing' && this.narrationActive,
+        () => this.getPairedListeningPosition()?.position ?? null,
+        createPairedProgressHooks(this.appService, this.bookKey, this.#pairedAudiobook),
+      );
+    }
   }
 
   get narrationAvailable(): boolean {
@@ -500,20 +519,30 @@ export class TTSController extends EventTarget {
         });
         return;
       }
-      if (source?.kind === 'bookorbit') {
-        // Streamed like the above, but the tracks cannot be handed to a media
-        // element as URLs at all: BookOrbit marks its audio
-        // `Cross-Origin-Resource-Policy: same-origin`, so `loadTrack` fetches
-        // each one natively and the composite plays it from a blob.
+      if (source?.kind === 'bookorbit' || source?.kind === 'opds') {
+        const pairing = this.#pairedAudiobook;
+        const playback = import('@/services/opds/pairedOffline').then(
+          ({ preferDownloadedOpdsNarration }) =>
+            preferDownloadedOpdsNarration(this.appService!, pairing, {
+              resolveTracks: async () =>
+                source.kind === 'bookorbit'
+                  ? (await import('@/services/bookorbit/narration')).bookOrbitNarrationTracks(
+                      source,
+                    )
+                  : (await import('@/services/opds/narration')).opdsNarrationTracks(source),
+              loadTrack: async (path) =>
+                source.kind === 'bookorbit'
+                  ? (await import('@/services/bookorbit/narration')).loadBookOrbitTrack(path)
+                  : (await import('@/services/opds/narration')).loadOpdsTrack(source, path),
+            }),
+        );
         this.ttsMediaOverlayClient.attachSource({
           ...(narrator ? { narrator } : {}),
           textHighlight: false,
-          resolveTracks: async () =>
-            (await import('@/services/bookorbit/narration')).bookOrbitNarrationTracks(source),
-          loadTrack: async (path) =>
-            (await import('@/services/bookorbit/narration')).loadBookOrbitTrack(path),
+          resolveTracks: async (href) => (await playback).resolveTracks(href),
+          loadTrack: async (path) => (await playback).loadTrack(path),
           loadBlob: async () => {
-            throw new Error('BookOrbit server not found');
+            throw new Error('Audiobook source not found');
           },
         });
         return;
@@ -685,6 +714,65 @@ export class TTSController extends EventTarget {
       const position = tts.takeStartPosition();
       if (position !== null) this.ttsClient.setNextChunkPosition?.(position);
     }
+    return ssml;
+  }
+
+  async getPairedStartCandidates(): Promise<{ listening: number | null; reading: number } | null> {
+    const association = this.#pairedAudiobook;
+    const tts = this.#getTts();
+    if (!association || !this.narrationActive || !(tts instanceof MediaOverlayTTS)) return null;
+    const start = tts.getStartAudioPosition();
+    const reading = start
+      ? pairedListeningPosition(association, start.audioHref, start.seconds)
+      : null;
+    if (!reading) return null;
+    const { pairedAudiobookEntry } = await import('@/services/audiobook/pairedProgressPersistence');
+    const entry = pairedAudiobookEntry(association, false);
+    const checkpoint = selectListeningCheckpoint(
+      [
+        association.listeningProgress,
+        entry?.progress
+          ? {
+              position: entry.progress[0],
+              duration: entry.progress[1],
+              updatedAt: entry.updatedAt,
+            }
+          : null,
+      ],
+      reading.duration,
+    );
+    return { listening: checkpoint?.position ?? null, reading: reading.position };
+  }
+
+  /** Prepare an exact global checkpoint without reporting a seek or starting audio. */
+  async preparePairedStartAt(position: number): Promise<string | undefined> {
+    const association = this.#pairedAudiobook;
+    if (!association || !this.narrationActive) return undefined;
+    let offset = 0;
+    const file = association.files.find((candidate) => {
+      if (position >= offset && position < offset + candidate.duration) return true;
+      offset += candidate.duration;
+      return false;
+    });
+    if (!file) throw new Error('Saved audiobook position is outside the recording');
+    const seconds = position - offset;
+    const entry = pairedChapterEntries(this.view.book, association).find(
+      (candidate) =>
+        candidate.audioFile.id === file.id &&
+        candidate.clipBegin <= seconds &&
+        seconds < candidate.clipEnd,
+    );
+    if (!entry || !(await this.#initTTSForSection(entry.sectionIndex))) {
+      throw new Error('Saved audiobook position has no ebook chapter mapping');
+    }
+    const timeline = await this.ensureTimeline();
+    const time = this.#sectionTimeAt(file.path, seconds);
+    const located = time === null ? null : timeline?.sentenceAtTime(time);
+    if (!located) throw new Error('Saved audiobook position has no playable mapping');
+    const ssml = this.#getTts()?.from(
+      this.#rangeAtSeekTarget(located.sentence, located.withinMediaSec),
+    );
+    this.ttsClient.setNextChunkPosition?.(located.withinMediaSec);
     return ssml;
   }
 
@@ -1252,6 +1340,7 @@ export class TTSController extends EventTarget {
       (await this.ttsClient.seekToChunkPosition?.(target.withinMediaSec))
     ) {
       this.#dispatchSeekLocation(range);
+      this.#reportPairedSeek(target);
       return;
     }
     const isPlaying = this.state === 'playing';
@@ -1260,6 +1349,21 @@ export class TTSController extends EventTarget {
     await this.stop(isPlaying);
     if (!isPlaying) this.state = 'forward-paused';
     await this.#resumeAt(target, range, isPlaying);
+    this.#reportPairedSeek(target);
+  }
+
+  #reportPairedSeek(target: { index: number; withinMediaSec: number }) {
+    const par = this.#mediaOverlaySection?.pars[target.index];
+    if (!par || !this.#pairedAudiobook || !this.narrationActive) return;
+    const position = pairedListeningPosition(
+      this.#pairedAudiobook,
+      par.audioHref,
+      par.clipBegin + target.withinMediaSec,
+    );
+    if (position) {
+      this.#pairedSeekPosition = position;
+      this.#pairedListening?.seek(position.position);
+    }
   }
 
   // Continue (or park a paused session) at a timeline target once the current
@@ -1305,6 +1409,17 @@ export class TTSController extends EventTarget {
       audioHref: par.audioHref,
       seconds: par.clipBegin + (this.ttsClient.getChunkPosition?.() ?? 0),
     };
+  }
+
+  getPairedListeningPosition(): { position: number; duration: number } | null {
+    if (!this.narrationActive || !this.#pairedAudiobook) return null;
+    if (this.#pairedSeekPosition && this.state !== 'playing') return this.#pairedSeekPosition;
+    if (this.state === 'playing') this.#pairedSeekPosition = null;
+    if (this.ttsClient.getChunkPosition?.() == null) return null;
+    const current = this.#narrationPosition();
+    return current
+      ? pairedListeningPosition(this.#pairedAudiobook, current.audioHref, current.seconds)
+      : null;
   }
 
   // Timeline seconds of a recording position inside the current section, or
@@ -1356,6 +1471,7 @@ export class TTSController extends EventTarget {
     }
     const range = this.#rangeAtSeekTarget(located.sentence, located.withinMediaSec);
     await this.#resumeAt(located, range, isPlaying);
+    this.#reportPairedSeek(located);
   }
 
   async #initTTSForNextSection(): Promise<boolean> {
@@ -1412,6 +1528,7 @@ export class TTSController extends EventTarget {
   // Falls back to a full stop only at end of book, where there is nothing
   // left to pause on.
   async #stopAtChapterBoundary() {
+    this.#pairedListening?.pause();
     if (await this.#initTTSForNextSection()) {
       this.state = 'forward-paused';
       this.#syncAudioKeepAlive();
@@ -1676,6 +1793,7 @@ export class TTSController extends EventTarget {
   }
 
   async pause() {
+    this.#pairedListening?.pause();
     this.state = 'paused';
     this.#syncAudioKeepAlive();
     if (!(await this.ttsClient.pause().catch((e) => this.error(e)))) {
@@ -1974,6 +2092,7 @@ export class TTSController extends EventTarget {
         this.#suppressMarkHighlight = false;
       }
     }
+    this.#pairedListening?.start();
     return located;
   }
 
@@ -2172,6 +2291,7 @@ export class TTSController extends EventTarget {
   }
 
   async shutdown() {
+    this.#pairedListening?.close();
     stopAudioKeepAlive();
     await this.stop();
     this.#clearAllHighlights();
