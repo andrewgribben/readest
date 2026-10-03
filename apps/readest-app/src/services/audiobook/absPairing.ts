@@ -11,7 +11,13 @@ import type { NarrationTrack } from '@/services/tts/mediaOverlay/MultiTrackNarra
 import { createAbsClient } from '@/services/audiobookshelf/createClient';
 import { findABSServerById, isAbsBookOrphaned } from '@/store/absServerStore';
 import type { ABSLibraryItem } from '@/types/audiobookshelf';
-import type { AudiobookChapter, AudiobookFile, Book, PairedAudiobookAbsSource } from '@/types/book';
+import type {
+  AudiobookChapter,
+  AudiobookFile,
+  Book,
+  PairedAudiobookAbsSource,
+  PairedAudiobookSource,
+} from '@/types/book';
 import type { AppService } from '@/types/system';
 import { proxiedMediaUrl } from './mediaProxy';
 import {
@@ -24,20 +30,33 @@ import { getBaseFilename } from '@/utils/path';
 
 export const ABS_PAIRED_FILE_ID = 'abs';
 
-/** Everything the wizard needs before the user maps chapters. */
-export interface AbsPairingSource {
+/**
+ * Everything the pairing wizard needs before the user maps chapters, for any
+ * streamed source (Audiobookshelf, BookOrbit, or OPDS).
+ */
+export interface StreamedPairingSource {
   title?: string;
   narrator?: string;
   files: AudiobookFile[];
   chapters: AudiobookChapter[];
+  source: PairedAudiobookSource;
+}
+
+/** ABS-narrowed form of {@link StreamedPairingSource}. */
+export interface AbsPairingSource extends Omit<StreamedPairingSource, 'source'> {
   source: PairedAudiobookAbsSource;
 }
 
-/** Library audiobooks that can be paired: live ABS books whose server is still configured. */
+/**
+ * Library audiobooks that can be paired from Audiobookshelf: live ABS books
+ * whose server is still configured. OPDS / BookOrbit stubs are listed by
+ * {@link listPairableOpdsBooks} instead — `isAudiobook` covers all three.
+ */
 export const listPairableAbsBooks = (library: Book[]): Book[] =>
   library
     .filter(
       (book) =>
+        book.format === 'ABS' &&
         isAudiobook(book) &&
         !book.deletedAt &&
         book.absMediaType !== 'podcast' &&

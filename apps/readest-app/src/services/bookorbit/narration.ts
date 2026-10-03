@@ -28,6 +28,27 @@ export const bookOrbitNarrationTracks = async (
   }));
 };
 
+/**
+ * The file holding a global position, for previewing a chapter from its start.
+ * Only available when the loopback media proxy can serve a streamable URL.
+ */
+export const bookOrbitPreviewClip = async (
+  source: PairedAudiobookBookOrbitSource,
+  globalSec: number,
+): Promise<{ url: string; start: number; duration: number } | null> => {
+  const tracks = await bookOrbitNarrationTracks(source);
+  const streamable = tracks.filter((track) => /^https?:\/\//.test(track.url));
+  if (!streamable.length) return null;
+  const sorted = [...streamable].sort((a, b) => a.startOffset - b.startOffset);
+  const track =
+    [...sorted].reverse().find((candidate) => candidate.startOffset <= globalSec) ?? sorted[0]!;
+  return {
+    url: track.url,
+    start: Math.max(0, Math.min(globalSec - track.startOffset, track.duration)),
+    duration: track.duration,
+  };
+};
+
 export const loadBookOrbitTrack = async (contentPath: string): Promise<Blob> => {
   // Built per track rather than cached: a track lasts tens of minutes, far
   // longer than the 15-minute access token, so a kept client would only have

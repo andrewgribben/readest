@@ -21,7 +21,7 @@ import {
   absPreviewClip,
   listPairableAbsBooks,
   loadAbsPairingSource,
-  type AbsPairingSource,
+  type StreamedPairingSource,
 } from '@/services/audiobook/absPairing';
 import { getMediaProxyBase } from '@/services/audiobook/mediaProxy';
 import {
@@ -36,6 +36,9 @@ import {
   removePairedAudiobook,
   type AudiobookImportFile,
 } from '@/services/audiobook/storage';
+import { bookOrbitPreviewClip } from '@/services/bookorbit/narration';
+import { listPairableOpdsBooks, loadOpdsPairingSource } from '@/services/opds/pairing';
+import { opdsPreviewClip } from '@/services/opds/narration';
 import { findABSServerById } from '@/store/absServerStore';
 import { useBookDataStore } from '@/store/bookDataStore';
 import { useLibraryStore } from '@/store/libraryStore';
@@ -46,12 +49,51 @@ import type {
   AudiobookChapterMapping,
   Book,
   PairedAudiobook,
+  PairedAudiobookSource,
 } from '@/types/book';
 import { eventDispatcher } from '@/utils/event';
 import AudiobookChapterPicker, { formatAudiobookTimecode } from './AudiobookChapterPicker';
 import StepProgress from './AudiobookStepProgress';
 
-type WizardStep = 'summary' | 'select' | 'abs' | 'anchor' | 'review';
+type WizardStep = 'summary' | 'select' | 'abs' | 'opds' | 'anchor' | 'review';
+
+const streamedSourceLabel = (source: PairedAudiobookSource | undefined): string | null => {
+  if (!source) return null;
+  switch (source.kind) {
+    case 'audiobookshelf':
+      return findABSServerById(source.serverId)?.name ?? 'Audiobookshelf';
+    case 'bookorbit':
+      return 'BookOrbit';
+    case 'opds': {
+      const catalog = useSettingsStore
+        .getState()
+        .settings.opdsCatalogs?.find((entry) => entry.id === source.catalogId && !entry.deletedAt);
+      return catalog?.name ?? 'OPDS';
+    }
+    default: {
+      const _exhaustive: never = source;
+      return _exhaustive;
+    }
+  }
+};
+
+const resolveStreamedPreviewClip = async (
+  source: PairedAudiobookSource,
+  globalSec: number,
+): Promise<{ url: string; start: number; duration: number } | null> => {
+  switch (source.kind) {
+    case 'audiobookshelf':
+      return absPreviewClip(source, globalSec, await getMediaProxyBase());
+    case 'bookorbit':
+      return bookOrbitPreviewClip(source, globalSec);
+    case 'opds':
+      return opdsPreviewClip(source, globalSec);
+    default: {
+      const _exhaustive: never = source;
+      return _exhaustive;
+    }
+  }
+};
 
 interface AudiobookPairingDialogProps {
   bookKey: string;
@@ -113,9 +155,11 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
   const [association] = useState<PairedAudiobook | null>(initialAssociation);
   const [step, setStep] = useState<WizardStep>(association ? 'summary' : 'select');
   const [preparedFiles, setPreparedFiles] = useState<PreparedImportFile[]>([]);
-  const [preparedAbs, setPreparedAbs] = useState<AbsPairingSource | null>(null);
+  const [preparedStreamed, setPreparedStreamed] = useState<StreamedPairingSource | null>(null);
   const [absBooks, setAbsBooks] = useState<Book[]>([]);
+  const [opdsBooks, setOpdsBooks] = useState<Book[]>([]);
   const [absQuery, setAbsQuery] = useState('');
+  const [opdsQuery, setOpdsQuery] = useState('');
   const [selectedEbookChapterId, setSelectedEbookChapterId] = useState('');
   const [selectedAudioChapterId, setSelectedAudioChapterId] = useState('');
   const [mappings, setMappings] = useState<Record<string, string>>(
@@ -130,16 +174,16 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
 
   const ebookChapters = useMemo(() => collectAudiobookTextChapters(bookDoc.toc ?? []), [bookDoc]);
   const importedAudioChapters = useMemo(
-    () => preparedAbs?.chapters ?? preparedFiles.flatMap(({ metadata }) => metadata.chapters),
-    [preparedAbs, preparedFiles],
+    () => preparedStreamed?.chapters ?? preparedFiles.flatMap(({ metadata }) => metadata.chapters),
+    [preparedStreamed, preparedFiles],
   );
-  const hasPreparedSource = preparedFiles.length > 0 || preparedAbs !== null;
+  const hasPreparedSource = preparedFiles.length > 0 || preparedStreamed !== null;
   const audioChapters =
     step === 'review' && !hasPreparedSource ? (association?.chapters ?? []) : importedAudioChapters;
   // Where the audio for a preview comes from: the source being prepared, else
   // the saved pairing whose mapping is being edited.
-  const sourceForPreview = preparedAbs?.source ?? (hasPreparedSource ? null : association?.source);
-  const previewAbsSource = sourceForPreview?.kind === 'audiobookshelf' ? sourceForPreview : null;
+  const sourceForPreview =
+    preparedStreamed?.source ?? (hasPreparedSource ? null : association?.source);
   const filteredAbsBooks = useMemo(() => {
     const normalized = absQuery.trim().toLocaleLowerCase();
     if (!normalized) return absBooks;
@@ -149,6 +193,20 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
         candidate.author.toLocaleLowerCase().includes(normalized),
     );
   }, [absBooks, absQuery]);
+  const filteredOpdsBooks = useMemo(() => {
+    const normalized = opdsQuery.trim().toLocaleLowerCase();
+    if (!normalized) return opdsBooks;
+    return opdsBooks.filter(
+      (candidate) =>
+        candidate.title.toLocaleLowerCase().includes(normalized) ||
+        candidate.author.toLocaleLowerCase().includes(normalized),
+    );
+  }, [opdsBooks, opdsQuery]);
+  const streamedPickerStep: WizardStep | null = preparedStreamed
+    ? preparedStreamed.source.kind === 'audiobookshelf'
+      ? 'abs'
+      : 'opds'
+    : null;
   const audioChapterById = new Map(audioChapters.map((chapter) => [chapter.id, chapter]));
   const mappedAudioIds = new Set(Object.values(mappings));
   const mappedCount = Object.keys(mappings).filter((id) => mappings[id]).length;
@@ -186,7 +244,9 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
     const { library, libraryLoaded } = useLibraryStore.getState();
     void (async () => {
       const books = libraryLoaded ? library : await appService.loadLibraryBooks();
-      if (!cancelled) setAbsBooks(listPairableAbsBooks(books));
+      if (cancelled) return;
+      setAbsBooks(listPairableAbsBooks(books));
+      setOpdsBooks(listPairableOpdsBooks(books));
     })();
     return () => {
       cancelled = true;
@@ -262,7 +322,7 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
       }
       const chapters = nextFiles.flatMap(({ metadata }) => metadata.chapters);
       if (!chapters.length) throw new Error(_('No playable audio chapters were found.'));
-      setPreparedAbs(null);
+      setPreparedStreamed(null);
       setPreparedFiles(nextFiles);
       setSelectedEbookChapterId(ebookChapters[0]!.id);
       setSelectedAudioChapterId(chapters[0]!.id);
@@ -276,7 +336,10 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
     }
   };
 
-  const chooseAbsBook = async (candidate: Book) => {
+  const chooseStreamedBook = async (
+    candidate: Book,
+    load: (book: Book) => Promise<StreamedPairingSource>,
+  ) => {
     if (!appService) return;
     setError('');
     if (!ebookChapters.length) {
@@ -286,9 +349,9 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
     setBusyMessage(_('Loading audiobook chapters'));
     try {
       await previewPlayerRef.current?.stop();
-      const source = await loadAbsPairingSource(appService, candidate);
+      const source = await load(candidate);
       setPreparedFiles([]);
-      setPreparedAbs(source);
+      setPreparedStreamed(source);
       setSelectedEbookChapterId(ebookChapters[0]!.id);
       setSelectedAudioChapterId(source.chapters[0]!.id);
       setMappings({});
@@ -299,6 +362,11 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
       setBusyMessage('');
     }
   };
+
+  const chooseAbsBook = (candidate: Book) =>
+    chooseStreamedBook(candidate, (book) => loadAbsPairingSource(appService!, book));
+
+  const chooseOpdsBook = (candidate: Book) => chooseStreamedBook(candidate, loadOpdsPairingSource);
 
   const buildAutomaticMapping = () => {
     const automatic = buildSequentialAudiobookMappings(
@@ -315,7 +383,7 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
 
   const editExistingMapping = () => {
     setPreparedFiles([]);
-    setPreparedAbs(null);
+    setPreparedStreamed(null);
     setMappings(mappingRecord(association?.mappings ?? []));
     setStep('review');
   };
@@ -342,10 +410,10 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
     try {
       await eventDispatcher.dispatch('tts-stop', { bookKey });
       let clip: Omit<AudiobookPreviewClip, 'id'>;
-      if (previewAbsSource) {
+      if (sourceForPreview) {
         // Chapter times are global; the preview plays the file holding the start.
-        const remote = absPreviewClip(previewAbsSource, chapter.start, await getMediaProxyBase());
-        if (!remote) throw new Error(_('Audiobookshelf server not found'));
+        const remote = await resolveStreamedPreviewClip(sourceForPreview, chapter.start);
+        if (!remote) throw new Error(_('Audiobook server not found'));
         // A chapter can continue into the next track; keep the preview within
         // the file it starts in so it does not run off the end of the clip.
         const withinTrack = Math.min(chapter.end - chapter.start, remote.duration - remote.start);
@@ -383,19 +451,19 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
       await eventDispatcher.dispatch('tts-stop', { bookKey });
       await previewPlayerRef.current?.stop();
       let nextAssociation: PairedAudiobook | null;
-      if (preparedAbs) {
+      if (preparedStreamed) {
         nextAssociation = await persistStreamedPairedAudiobook(
           appService,
           book.hash,
           {
             version: 1,
-            ...(preparedAbs.title ? { title: preparedAbs.title } : {}),
-            ...(preparedAbs.narrator ? { narrator: preparedAbs.narrator } : {}),
-            files: preparedAbs.files,
-            chapters: preparedAbs.chapters,
+            ...(preparedStreamed.title ? { title: preparedStreamed.title } : {}),
+            ...(preparedStreamed.narrator ? { narrator: preparedStreamed.narrator } : {}),
+            files: preparedStreamed.files,
+            chapters: preparedStreamed.chapters,
             mappings: orderedMappings(),
             createdAt: Math.max(Date.now(), (association?.createdAt ?? 0) + 1),
-            source: preparedAbs.source,
+            source: preparedStreamed.source,
           },
           association ?? undefined,
           persistAssociation,
@@ -451,19 +519,14 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
   const renderSummary = () => {
     if (!association) return null;
     const totalDuration = association.files.reduce((total, file) => total + file.duration, 0);
-    const streamedFrom =
-      association.source?.kind === 'audiobookshelf'
-        ? (findABSServerById(association.source.serverId)?.name ?? 'Audiobookshelf')
-        : association.source?.kind === 'bookorbit'
-          ? 'BookOrbit'
-          : null;
+    const streamedFrom = streamedSourceLabel(association.source);
     return (
       <>
         <SurfaceHeader
           title={_('Paired Audiobook')}
           description={
-            // Source-neutral: this dialog now covers BookOrbit pairings too,
-            // and the server's own name is shown in the row below either way.
+            // Source-neutral: ABS, BookOrbit, and OPDS pairings all land here,
+            // and the upstream's own name is shown in the row below.
             streamedFrom
               ? _('Manage the streamed audiobook paired with this ebook.')
               : _('Manage the local recording paired with this ebook.')
@@ -589,6 +652,27 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
           </span>
         </button>
       )}
+      {opdsBooks.length > 0 && (
+        <button
+          type='button'
+          onClick={() => setStep('opds')}
+          disabled={busy}
+          className={clsx(
+            'eink-bordered group mt-4 flex min-h-28 w-full flex-col items-center justify-center gap-3',
+            'border-base-200 bg-base-100 rounded-lg border px-6 py-5',
+            'hover:border-base-300 hover:bg-base-200/60 transition-colors duration-150',
+            'focus-visible:ring-base-content/15 focus-visible:outline-hidden focus-visible:ring-2',
+          )}
+        >
+          <span className='bg-base-200 group-hover:bg-base-content group-hover:text-base-100 flex h-10 w-10 items-center justify-center rounded-full transition-colors duration-150'>
+            <MdHeadphones className='h-6 w-6' />
+          </span>
+          <span className='font-medium'>{_('Choose from OPDS')}</span>
+          <span className='text-neutral-content text-[0.85em]'>
+            {_('Streamed from your OPDS catalog, nothing to download')}
+          </span>
+        </button>
+      )}
       {association && (
         <div className='mt-5 flex justify-start'>
           <button className='btn btn-ghost' disabled={busy} onClick={() => setStep('summary')}>
@@ -599,14 +683,26 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
     </>
   );
 
-  const renderAbsPicker = () => (
+  const renderLibraryPicker = (
+    kind: 'abs' | 'opds',
+    candidates: Book[],
+    query: string,
+    setQuery: (value: string) => void,
+    onChoose: (book: Book) => void,
+  ) => (
     <>
       <StepProgress current={1} />
       <SurfaceHeader
         title={_('Choose Audiobook')}
-        description={_('Pick the Audiobookshelf audiobook to pair with “{{book}}”.', {
-          book: book?.title ?? _('this ebook'),
-        })}
+        description={
+          kind === 'abs'
+            ? _('Pick the Audiobookshelf audiobook to pair with “{{book}}”.', {
+                book: book?.title ?? _('this ebook'),
+              })
+            : _('Pick the OPDS audiobook to pair with “{{book}}”.', {
+                book: book?.title ?? _('this ebook'),
+              })
+        }
       />
       <div className='eink-bordered border-base-200 bg-base-100 mb-5 overflow-hidden rounded-lg border'>
         <div className='border-base-200 border-b p-2'>
@@ -615,19 +711,19 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
             className='input input-sm eink-bordered w-full border-transparent'
             aria-label={_('Search audiobooks')}
             placeholder={_('Search audiobooks')}
-            value={absQuery}
-            onChange={(event) => setAbsQuery(event.target.value)}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
           />
         </div>
         <div className='divide-base-200 max-h-80 overflow-y-auto divide-y' role='list'>
-          {filteredAbsBooks.map((candidate) => (
+          {candidates.map((candidate) => (
             <button
               key={candidate.hash}
               type='button'
               role='listitem'
               className='hover:bg-base-200 flex min-h-14 w-full items-center gap-3 px-4 py-2 text-start'
               disabled={busy}
-              onClick={() => chooseAbsBook(candidate)}
+              onClick={() => onChoose(candidate)}
             >
               <span className='bg-base-200 flex h-9 w-9 shrink-0 items-center justify-center rounded-full'>
                 <MdHeadphones className='h-5 w-5' />
@@ -638,6 +734,7 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
                   {[
                     candidate.author,
                     candidate.duration && formatAudiobookTimecode(candidate.duration),
+                    kind === 'opds' && candidate.format === 'BOOKORBIT' ? 'BookOrbit' : null,
                   ]
                     .filter(Boolean)
                     .join(' · ')}
@@ -645,7 +742,7 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
               </span>
             </button>
           ))}
-          {filteredAbsBooks.length === 0 && (
+          {candidates.length === 0 && (
             <p className='text-neutral-content px-3 py-5 text-center text-sm'>
               {_('No matching audiobooks')}
             </p>
@@ -663,6 +760,12 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
       </WizardActions>
     </>
   );
+
+  const renderAbsPicker = () =>
+    renderLibraryPicker('abs', filteredAbsBooks, absQuery, setAbsQuery, chooseAbsBook);
+
+  const renderOpdsPicker = () =>
+    renderLibraryPicker('opds', filteredOpdsBooks, opdsQuery, setOpdsQuery, chooseOpdsBook);
 
   const renderAnchor = () => (
     <>
@@ -756,7 +859,7 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
         <button
           className='btn btn-ghost'
           disabled={busy}
-          onClick={() => setStep(preparedAbs ? 'abs' : 'select')}
+          onClick={() => setStep(streamedPickerStep ?? 'select')}
         >
           {_('Back')}
         </button>
@@ -917,6 +1020,7 @@ const AudiobookPairingDialog = ({ bookKey, bookDoc, onClose }: AudiobookPairingD
         {step === 'summary' && renderSummary()}
         {step === 'select' && renderSelect()}
         {step === 'abs' && renderAbsPicker()}
+        {step === 'opds' && renderOpdsPicker()}
         {step === 'anchor' && renderAnchor()}
         {step === 'review' && renderReview()}
       </div>

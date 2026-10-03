@@ -535,6 +535,24 @@ export class TTSController extends EventTarget {
         });
         return;
       }
+      if (source?.kind === 'opds') {
+        // Generic OPDS catalog audio. Unauthenticated catalogs stream the
+        // acquisition URLs; authenticated ones blob-fetch through loadTrack
+        // (see opdsNarrationTracks). Lazy import keeps the OPDS settings graph
+        // out of this module for every other book.
+        this.ttsMediaOverlayClient.attachSource({
+          ...(narrator ? { narrator } : {}),
+          textHighlight: false,
+          resolveTracks: async () =>
+            (await import('@/services/opds/narration')).opdsNarrationTracks(source),
+          loadTrack: async (path) =>
+            (await import('@/services/opds/narration')).loadOpdsTrack(source, path),
+          loadBlob: async () => {
+            throw new Error('OPDS catalog not found');
+          },
+        });
+        return;
+      }
       this.ttsMediaOverlayClient.attachSource({
         ...(narrator ? { narrator } : {}),
         textHighlight: false,

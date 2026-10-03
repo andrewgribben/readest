@@ -11,15 +11,20 @@
 // (`Cross-Origin-Resource-Policy: same-origin`), so elsewhere -- the web build,
 // iOS -- BlobAudioClock fetches one whole track at a time through the client
 // and releases the previous one. See ./mediaProxy.
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { BlobAudioClock, HtmlAudioClock } from '@/services/audiobook/AudiobookClock';
 import { AudiobookController } from '@/services/audiobook/AudiobookController';
 import type { AudiobookSource } from '@/services/audiobook/AudiobookController';
+import { NativeAudiobookClock } from '@/services/audiobook/NativeAudiobookClock';
+import { isTauriAppPlatform } from '@/services/environment';
+import { loadOpdsOfflineManifest } from '@/services/opds/offline';
 import { ttsSessionManager } from '@/services/tts/TTSSessionManager';
 import type { TTSMediaBridgeMeta } from '@/services/tts/ttsMediaBridge';
 import { useLibraryStore } from '@/store/libraryStore';
+import type { ABSTrack } from '@/types/audiobookshelf';
 import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
-import { uniqueId } from '@/utils/misc';
+import { getOSPlatform, uniqueId } from '@/utils/misc';
 import { bookOrbitProgressHooks } from './progressSync';
 import { makeAudiobookProgressSaver } from '@/services/audiobook/progressPersistence';
 import { parseBookOrbitAudioFilePath } from './audiobookId';
@@ -38,6 +43,33 @@ export interface BookOrbitAudiobookSession {
 }
 
 /** Matches the ABS syncer: keep the row live in the store, write to disk rarely. */
+
+const isIOSTauri = (): boolean => isTauriAppPlatform() && getOSPlatform() === 'ios';
+const isAndroidTauri = (): boolean => isTauriAppPlatform() && getOSPlatform() === 'android';
+const isLinuxTauri = (): boolean => isTauriAppPlatform() && getOSPlatform() === 'linux';
+
+const offlineLocalClock = (
+  appService: AppService,
+  tracks: ABSTrack[],
+): {
+  clock: BlobAudioClock | HtmlAudioClock | NativeAudiobookClock;
+  resolveUrl: (path: string) => string;
+} => {
+  const nativeClock = isIOSTauri() || isAndroidTauri();
+  const blobClock = !nativeClock && isLinuxTauri();
+  return {
+    resolveUrl: (path: string) => (nativeClock || blobClock ? path : convertFileSrc(path)),
+    clock: nativeClock
+      ? new NativeAudiobookClock()
+      : blobClock
+        ? new BlobAudioClock(async (path) => {
+            const bytes = await appService.readFile(path, 'None', 'binary');
+            const mimeType = tracks.find((track) => track.contentUrl === path)?.mimeType;
+            return new Blob([bytes], { type: mimeType });
+          })
+        : new HtmlAudioClock(),
+  };
+};
 
 /**
  * Record the book's length on its library row.
@@ -85,72 +117,113 @@ export const openBookOrbitAudiobookSession = async (input: {
   }
 
   const client = createBookOrbitClient();
-  if (!client) return null;
+  const offline = book.opdsDownloadedAt
+    ? await loadOpdsOfflineManifest(appService, book.hash)
+    : null;
 
-  const manifest = await client.getManifest(bookId);
-  const tracks = manifestTracks(manifest);
-  const chapters = manifestChapters(manifest);
-  const assetIds = manifestAssetIds(manifest);
+  // Streaming still needs the client; an offline copy can play without it.
+  if (!offline && !client) return null;
+
+  let tracks: ABSTrack[];
+  let chapters: AudiobookSource['chapters'];
+  let title: string;
+  let author: string;
+  let totalDuration: number;
+  let assetIds: string[] = [];
+  let manifestRevision = '';
+  let clock: BlobAudioClock | HtmlAudioClock | NativeAudiobookClock;
+  let resolveUrl: (path: string) => string;
+
+  if (offline) {
+    tracks = await Promise.all(
+      offline.tracks.map(async (track) => ({
+        ...track,
+        contentUrl: await appService.resolveFilePath(track.contentUrl, 'Books'),
+      })),
+    );
+    chapters = offline.chapters;
+    title = book.title;
+    author = book.author;
+    totalDuration = offline.duration;
+    ({ clock, resolveUrl } = offlineLocalClock(appService, tracks));
+  } else {
+    const manifest = await client!.getManifest(bookId);
+    tracks = manifestTracks(manifest);
+    chapters = manifestChapters(manifest);
+    assetIds = manifestAssetIds(manifest);
+    if (tracks.length === 0) return null;
+    totalDuration = tracks.reduce((sum, track) => sum + track.duration, 0);
+    title = manifest.book.title || book.title;
+    author = manifest.book.authors.join(' & ') || book.author;
+    manifestRevision = manifest.revision;
+
+    const mimeByUrl = new Map(tracks.map((track) => [track.contentUrl, track.mimeType]));
+    const streamUrl = await openBookOrbitMediaProxy(client!);
+    resolveUrl = (contentPath: string) => streamUrl?.(contentPath) ?? contentPath;
+    clock = streamUrl
+      ? new HtmlAudioClock()
+      : new BlobAudioClock(async (contentPath) => {
+          const res = await client!.fetchAsset(contentPath);
+          if (!res.ok) throw new Error(`BookOrbit asset fetch failed: ${res.status}`);
+          return new Blob([await res.arrayBuffer()], {
+            type: mimeByUrl.get(contentPath) ?? 'audio/mpeg',
+          });
+        });
+  }
+
   if (tracks.length === 0) return null;
-
-  const totalDuration = tracks.reduce((sum, track) => sum + track.duration, 0);
 
   // Best effort: a server without a stored position, or an unreachable one,
   // just means we fall back to the local progress.
   let serverPositionSec = 0;
   let baseRevision = 0;
-  try {
-    const state = await client.getPlaybackState(bookId);
-    if (state?.assetId) {
-      // The stored position is an offset *within one asset*, not into the
-      // book, so it has to be placed on the timeline before it means anything.
-      serverPositionSec =
-        globalFromAssetPosition(tracks, assetIds, state.assetId, state.positionMs ?? 0) ?? 0;
+  if (client && assetIds.length > 0) {
+    try {
+      const state = await client.getPlaybackState(bookId);
+      if (state?.assetId) {
+        // The stored position is an offset *within one asset*, not into the
+        // book, so it has to be placed on the timeline before it means anything.
+        serverPositionSec =
+          globalFromAssetPosition(tracks, assetIds, state.assetId, state.positionMs ?? 0) ?? 0;
+      }
+      baseRevision = state?.revision ?? 0;
+    } catch {
+      serverPositionSec = 0;
     }
-    baseRevision = state?.revision ?? 0;
-  } catch {
-    serverPositionSec = 0;
   }
 
-  const mimeByUrl = new Map(tracks.map((track) => [track.contentUrl, track.mimeType]));
-  const streamUrl = await openBookOrbitMediaProxy(client);
   recordDuration(appService, book.hash, totalDuration);
   const saveProgress = makeAudiobookProgressSaver(appService, book.hash, totalDuration);
 
   const source: AudiobookSource = {
     itemId: String(bookId),
-    title: manifest.book.title || book.title,
-    author: manifest.book.authors.join(' & ') || book.author,
+    title,
+    author,
     tracks,
     chapters,
-    // A streamable loopback URL where the proxy is available; otherwise the
-    // content path, which the blob loader below fetches.
-    resolveUrl: (contentPath: string) => streamUrl?.(contentPath) ?? contentPath,
+    resolveUrl,
     startAt: resolveStartAt(serverPositionSec, book, totalDuration),
   };
-
-  const clock = streamUrl
-    ? new HtmlAudioClock()
-    : new BlobAudioClock(async (contentPath) => {
-        const res = await client.fetchAsset(contentPath);
-        if (!res.ok) throw new Error(`BookOrbit asset fetch failed: ${res.status}`);
-        return new Blob([await res.arrayBuffer()], {
-          type: mimeByUrl.get(contentPath) ?? 'audio/mpeg',
-        });
-      });
 
   const controller = new AudiobookController(
     source,
     clock,
-    bookOrbitProgressHooks(
-      client,
-      bookId,
-      tracks,
-      assetIds,
-      manifest.revision,
-      baseRevision,
-      saveProgress,
-    ),
+    client && assetIds.length > 0
+      ? bookOrbitProgressHooks(
+          client,
+          bookId,
+          tracks,
+          assetIds,
+          manifestRevision,
+          baseRevision,
+          saveProgress,
+        )
+      : {
+          onTick: (position) => saveProgress(position, false),
+          onSeek: (position) => saveProgress(position, false),
+          onPause: (position) => saveProgress(position, true),
+          onEnd: (position) => saveProgress(position, true),
+        },
   );
 
   const bookKey = `${book.hash}-${uniqueId()}`;

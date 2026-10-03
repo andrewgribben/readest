@@ -69,7 +69,9 @@ The pairing wizard follows Continuum's anchor-and-review flow:
 1. Open a reflowable EPUB's book menu and choose **Pair Audiobook**.
 2. Select one M4B file or a naturally ordered set of MP3/M4A tracks, or, when
    an Audiobookshelf server is configured, **Choose from Audiobookshelf** and
-   pick one of its audiobooks to stream instead.
+   pick one of its audiobooks to stream instead. When the library already holds
+   audiobooks from an OPDS catalog (including BookOrbit), **Choose from OPDS**
+   lists those the same way.
 3. Choose one ebook chapter and the audio chapter or track known to match it.
 4. Readest fills the mapping in both directions by position. Review every row,
    leave ebook chapters without audio, reuse an audio chapter where necessary,
@@ -108,6 +110,14 @@ BookOrbit pairings likewise report their actual recording position through its
 playback-state API. Local pairings retain a device-local listening checkpoint.
 These saves do not move the ebook or change how a new paired session chooses its
 starting position; reading progress still syncs through Readest as usual.
+
+An OPDS pairing works the same way for audiobooks that were played from a
+catalog and landed in the library as `OPDSAUDIO` (or `BOOKORBIT` when the
+catalog is a configured BookOrbit server). The association stores the catalog
+id and track list; playback reuses the catalog credentials, with the same
+web+auth limit as the standalone OPDS player. BookOrbit pairings may also be
+created automatically when an ebook is downloaded from an OPDS entry that
+offers matching audio.
 
 ### Using it
 

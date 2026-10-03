@@ -49,6 +49,18 @@ describe('getBookContextMenuItemIds', () => {
     expect(ids).not.toContain('offlineDownload');
   });
 
+  it('offers an offline download for OPDS and BookOrbit audiobooks', () => {
+    const opds = createBook({ format: 'OPDSAUDIO', filePath: 'opdsaudio://x' });
+    const bookorbit = createBook({ format: 'BOOKORBIT', filePath: 'bookorbit://8' });
+    expect(getBookContextMenuItemIds(opds, { absOffline: true })).toContain('offlineDownload');
+    expect(getBookContextMenuItemIds(bookorbit, { absOffline: true })).toContain('offlineDownload');
+
+    const downloaded = { ...opds, opdsDownloadedAt: 1 };
+    const ids = getBookContextMenuItemIds(downloaded, { absOffline: true });
+    expect(ids).toContain('offlineRemove');
+    expect(ids).not.toContain('offlineDownload');
+  });
+
   it('never offers an offline download for podcasts or regular books', () => {
     const podcast = createBook({
       format: 'ABS',

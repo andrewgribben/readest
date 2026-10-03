@@ -34,6 +34,8 @@ vi.mock('@/store/absServerStore', () => ({ findABSServerById: () => null }));
 vi.mock('@/services/audiobookshelf/createClient', () => ({ createAbsClient: vi.fn() }));
 vi.mock('@/services/bookorbit/createClient', () => ({ createBookOrbitClient: () => state.client }));
 import { createPairedProgressHooks } from '@/services/audiobook/pairedProgressPersistence';
+import { buildOpdsPairingSource } from '@/services/opds/pairing';
+import { makeOpdsAudioFilePath } from '@/services/opds/audiobook';
 
 describe('paired recording persistence', () => {
   const pair = {
@@ -83,5 +85,36 @@ describe('paired recording persistence', () => {
     hooks.onPause!(90);
     expect(state.config.audiobook?.listeningProgress).toBeUndefined();
     expect(app.saveBookConfig).not.toHaveBeenCalled();
+  });
+  it('saves generic OPDS listening into its existing standalone library entry', () => {
+    const data = {
+      catalogId: 'catalog',
+      title: 'Audio',
+      author: 'Author',
+      tracks: [{ href: 'https://catalog.example/audio.mp3', mimeType: 'audio/mpeg' }],
+    };
+    const source = buildOpdsPairingSource(data, [
+      {
+        index: 0,
+        startOffset: 0,
+        duration: 300,
+        contentUrl: data.tracks[0]!.href,
+        mimeType: 'audio/mpeg',
+      },
+    ]);
+    const opdsPair: PairedAudiobook = { ...pair, ...source };
+    state.library = [
+      { hash: 'opds-audio', filePath: makeOpdsAudioFilePath(data), format: 'OPDSAUDIO' } as Book,
+    ];
+    state.config = { ...state.config, audiobook: opdsPair };
+    const app = {
+      saveLibraryBooks: vi.fn().mockResolvedValue(undefined),
+      saveBookConfig: vi.fn().mockResolvedValue(undefined),
+    };
+    createPairedProgressHooks(app as unknown as AppService, 'ebook-key', opdsPair).onPause!(87);
+    expect(state.library).toHaveLength(1);
+    expect(state.library[0]).toMatchObject({ hash: 'opds-audio', progress: [87, 300] });
+    expect(app.saveLibraryBooks).toHaveBeenCalledWith(state.library);
+    expect(state.client.getManifest).not.toHaveBeenCalled();
   });
 });
