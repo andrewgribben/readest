@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   customizationPurchased: false,
 }));
 const queueAbsOfflineDownload = vi.hoisted(() => vi.fn(() => 'transfer-1'));
+const queueOpdsOfflineDownload = vi.hoisted(() => vi.fn(() => 'transfer-2'));
 const navigateToLogin = vi.hoisted(() => vi.fn());
 const navigateToProfile = vi.hoisted(() => vi.fn());
 
@@ -23,13 +24,19 @@ vi.mock('@/hooks/useQuotaStats', () => ({
   }),
 }));
 vi.mock('@/services/transferManager', () => ({
-  transferManager: { queueAbsOfflineDownload },
+  transferManager: { queueAbsOfflineDownload, queueOpdsOfflineDownload },
 }));
 vi.mock('@/utils/nav', () => ({ navigateToLogin, navigateToProfile }));
 
 const { useAbsOfflineDownload } = await import('@/app/library/hooks/useAbsOfflineDownload');
 
 const book = { hash: 'h1', format: 'ABS', title: 'Alice' } as Book;
+const opdsBook = {
+  hash: 'h-opds',
+  format: 'OPDSAUDIO',
+  title: 'OPDS Audio',
+  filePath: 'opdsaudio://x',
+} as Book;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -80,6 +87,16 @@ describe('useAbsOfflineDownload', () => {
 
     expect(queueAbsOfflineDownload).toHaveBeenCalledWith(book, 1);
     expect(queueAbsOfflineDownload).toHaveBeenCalledWith(other, 1);
+  });
+
+  it('queues an OPDS audiobook through the OPDS offline downloader', () => {
+    state.plan = 'plus';
+    const { result } = renderHook(() => useAbsOfflineDownload());
+
+    result.current.handleBookOfflineDownload(opdsBook);
+
+    expect(queueOpdsOfflineDownload).toHaveBeenCalledWith(opdsBook, 1);
+    expect(queueAbsOfflineDownload).not.toHaveBeenCalled();
   });
 
   it('routes a free user to the upgrade page once for a bulk download', () => {

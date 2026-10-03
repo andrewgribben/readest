@@ -519,20 +519,30 @@ export class TTSController extends EventTarget {
         });
         return;
       }
-      if (source?.kind === 'bookorbit') {
-        // Streamed like the above, but the tracks cannot be handed to a media
-        // element as URLs at all: BookOrbit marks its audio
-        // `Cross-Origin-Resource-Policy: same-origin`, so `loadTrack` fetches
-        // each one natively and the composite plays it from a blob.
+      if (source?.kind === 'bookorbit' || source?.kind === 'opds') {
+        const pairing = this.#pairedAudiobook;
+        const playback = import('@/services/opds/pairedOffline').then(
+          ({ preferDownloadedOpdsNarration }) =>
+            preferDownloadedOpdsNarration(this.appService!, pairing, {
+              resolveTracks: async () =>
+                source.kind === 'bookorbit'
+                  ? (await import('@/services/bookorbit/narration')).bookOrbitNarrationTracks(
+                      source,
+                    )
+                  : (await import('@/services/opds/narration')).opdsNarrationTracks(source),
+              loadTrack: async (path) =>
+                source.kind === 'bookorbit'
+                  ? (await import('@/services/bookorbit/narration')).loadBookOrbitTrack(path)
+                  : (await import('@/services/opds/narration')).loadOpdsTrack(source, path),
+            }),
+        );
         this.ttsMediaOverlayClient.attachSource({
           ...(narrator ? { narrator } : {}),
           textHighlight: false,
-          resolveTracks: async () =>
-            (await import('@/services/bookorbit/narration')).bookOrbitNarrationTracks(source),
-          loadTrack: async (path) =>
-            (await import('@/services/bookorbit/narration')).loadBookOrbitTrack(path),
+          resolveTracks: async (href) => (await playback).resolveTracks(href),
+          loadTrack: async (path) => (await playback).loadTrack(path),
           loadBlob: async () => {
-            throw new Error('BookOrbit server not found');
+            throw new Error('Audiobook source not found');
           },
         });
         return;

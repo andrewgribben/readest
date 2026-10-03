@@ -8,7 +8,7 @@ import { SystemSettings } from '@/types/settings';
 import type { PageStatEvent, StatBook } from '@/types/statistics';
 import { StatisticsDb } from '@/services/statistics/statisticsDb';
 import { getBookDirOfPath, getLibraryFilename } from '@/utils/book';
-import { getAbsOfflineDir } from '@/utils/audiobook';
+import { getAbsOfflineDir, getOpdsOfflineDir } from '@/utils/audiobook';
 import { stampBookConfigSchema } from '@/utils/serializer';
 import { configureZip } from '@/utils/zip';
 
@@ -19,6 +19,14 @@ const isAbsOfflineEntry = (entryName: string): boolean => {
   const dir = getBookDirOfPath(entryName);
   return !!dir && entryName.startsWith(`${getAbsOfflineDir(dir)}/`);
 };
+
+const isOpdsOfflineEntry = (entryName: string): boolean => {
+  const dir = getBookDirOfPath(entryName);
+  return !!dir && entryName.startsWith(`${getOpdsOfflineDir(dir)}/`);
+};
+
+const isStreamingOfflineEntry = (entryName: string): boolean =>
+  isAbsOfflineEntry(entryName) || isOpdsOfflineEntry(entryName);
 
 /** Root-level zip entry name for the backed-up global settings snapshot. */
 export const SETTINGS_BACKUP_FILENAME = 'settings.json';
@@ -365,9 +373,9 @@ async function collectBackupEntries(
   const bookFiles = files
     .filter((file) => file.size > 0 && isExported(file.path))
     .map((file) => ({ file, entryName: file.path.replace(/\\/g, '/') }))
-    // Offline Audiobookshelf audio (#6256) is re-downloadable and can run to
+    // Offline streaming audio (#6256) is re-downloadable and can run to
     // gigabytes, each file read into memory here.
-    .filter(({ entryName }) => !isAbsOfflineEntry(entryName))
+    .filter(({ entryName }) => !isStreamingOfflineEntry(entryName))
     // A restore killed mid-file leaves its `.part` temp file behind.
     .filter(({ entryName }) => !entryName.endsWith('.part'));
   return { texts, files: bookFiles };
