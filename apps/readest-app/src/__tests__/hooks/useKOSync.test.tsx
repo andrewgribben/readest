@@ -209,6 +209,31 @@ afterEach(() => {
 });
 
 describe('useKOSync — applying a newer remote position (#5065)', () => {
+  test('prompts for percentage-only remote progress and applies it after acceptance', async () => {
+    h.remote = { percentage: 0.17, timestamp: Math.floor(Date.now() / 1000) + 10_000 };
+    h.getProgressMock.mockResolvedValue(h.remote);
+    const { result } = renderHook(() => useKOSync('h1-view1'));
+    await settle();
+    expect(result.current.syncState).toBe('conflict');
+    expect(h.goToFraction).not.toHaveBeenCalled();
+    await advance(KOSYNC_PUSH_DEBOUNCE_MS);
+    expect(h.updateProgressMock).not.toHaveBeenCalled();
+    await act(async () => {
+      result.current.resolveWithRemote();
+      await flushMicrotasks();
+    });
+    expect(h.goToFraction).toHaveBeenCalledWith(0.17);
+  });
+
+  test('applies percentage-only remote progress in receive mode', async () => {
+    h.settings.kosync.strategy = 'receive';
+    h.remote = { percentage: 0.17 };
+    h.getProgressMock.mockResolvedValue(h.remote);
+    renderHook(() => useKOSync('h1-view1'));
+    await settle();
+    expect(h.goToFraction).toHaveBeenCalledWith(0.17);
+  });
+
   test('applies the newer remote position on open (silent strategy)', async () => {
     h.settings.kosync.strategy = 'silent';
     renderHook(() => useKOSync('h1-view1'));

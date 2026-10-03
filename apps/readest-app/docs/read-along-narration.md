@@ -69,7 +69,9 @@ The pairing wizard follows Continuum's anchor-and-review flow:
 1. Open a reflowable EPUB's book menu and choose **Pair Audiobook**.
 2. Select one M4B file or a naturally ordered set of MP3/M4A tracks, or, when
    an Audiobookshelf server is configured, **Choose from Audiobookshelf** and
-   pick one of its audiobooks to stream instead.
+   pick one of its audiobooks to stream instead. When the library already holds
+   audiobooks from an OPDS catalog (including BookOrbit), **Choose from OPDS**
+   lists those the same way.
 3. Choose one ebook chapter and the audio chapter or track known to match it.
 4. Readest fills the mapping in both directions by position. Review every row,
    leave ebook chapters without audio, reuse an audio chapter where necessary,
@@ -101,9 +103,26 @@ is still device-local, recording the server, item and track list
 (`PairedAudiobook.source`); playback streams each file with the server's current
 access token, so it needs that association's server row and a network
 connection. It is otherwise the same device-local association,
-and removing it only unpairs. Listening position is not reported back to the
-Audiobookshelf server while reading along; reading progress still syncs through
-Readest as usual.
+and removing it only unpairs. Actual listening position is saved every 15 seconds
+and flushed on pause or session shutdown, using the same audiobook library
+entry and Audiobookshelf listening-session reporting as standalone playback.
+BookOrbit pairings likewise report their actual recording position through its
+playback-state API. Local pairings retain a device-local listening checkpoint.
+These saves do not move the ebook or change how a new paired session chooses its
+starting position; reading progress still syncs through Readest as usual.
+
+An OPDS pairing works the same way for audiobooks that were played from a
+catalog and landed in the library as `OPDSAUDIO` (or `BOOKORBIT` when the
+catalog is a configured BookOrbit server). The association stores the catalog
+id and track list. Paired playback prefers the audiobook's completed local
+download when its tracks are present and match the paired timeline. The
+provider identity and mappings stay unchanged, so listening progress still
+belongs to the same audiobook. Without a usable local copy, playback reuses
+the catalog credentials, with the same web+auth limit as the standalone OPDS
+player. The pairing summary identifies a usable download rather than always
+labelling the audiobook as streamed. BookOrbit pairings may also be
+created automatically when an ebook is downloaded from an OPDS entry that
+offers matching audio.
 
 ### Using it
 
@@ -315,3 +334,16 @@ Verified end to end against two very different real books:
   330 MB container, no `media:narrator` (hence the "Book narration" fallback),
   4 unnarrated front-matter sections. Its computed chapter timeline came out at
   2966.8s against the book's declared `media:duration` of 2966.79s.
+
+## Paired startup position choice
+
+A new paired session previously always used the current ebook passage's chapter/proportional audio estimate, even when the recording had a saved listening checkpoint. Playback then reported that estimate as new listening progress. Merely computing a candidate must never save it.
+
+New sessions compare that estimate with the newest valid local listening checkpoint (shared standalone library entry or pairing listeningProgress). Newest means capture time, not greatest playback position; rewinding is legitimate. Durations must match within one second. A difference greater than AUDIO_POSITION_CHOICE_THRESHOLD_SEC (30 seconds) asks whether to resume the audiobook or start from the ebook. Exactly thirty seconds or less resumes the audiobook. The ebook candidate is approximate. One percent was rejected because it represents several minutes on a long recording.
+
+The choice occurs only at new-session startup, never on page turns, ebook sync, or ordinary pause/resume. Dismissal leaves playback stopped and writes no checkpoint. An unplayed session cannot flush its prepared clock on teardown. Choosing the checkpoint positions the recording precisely on its global timeline without reporting a seek before playback. Unmapped timestamps fail explicitly instead of silently selecting the ebook estimate. Reading-driven audio saves remain a separate stage.
+
+PR #1 now has one implementation commit and one documentation commit. Reverting its implementation commit removes the consolidated OPDS and listening-progress feature as a whole; the retired paired-choice commit is not an independent rollback unit in this history. For a targeted change to startup selection, keep the no-write-before-playback guard and update the selector and its regression tests together. The threshold is a named constant in services/audiobook/startPosition.ts; adjust that constant and its boundary regression tests together if device testing finds thirty seconds too sensitive.
+
+
+The user-facing behaviour, verification record and remaining work for these changes are described in [OPDS audiobooks and saved listening progress](features/opds-audiobooks.md).

@@ -61,10 +61,10 @@ export interface AudiobookSource {
 
 export interface AudiobookProgressHooks {
   onPlay?: () => void;
-  onPause?: (positionSec: number) => void;
-  onTick?: (positionSec: number) => void; // ~ every 15s while playing
-  onSeek?: (positionSec: number) => void;
-  onEnd?: (positionSec: number) => void; // shutdown / natural end
+  onPause?: (positionSec: number, capturedAt?: number) => void;
+  onTick?: (positionSec: number, capturedAt?: number) => void; // ~ every 15s while playing
+  onSeek?: (positionSec: number, capturedAt?: number) => void;
+  onEnd?: (positionSec: number, capturedAt?: number) => void; // shutdown / natural end
 }
 
 export class AudiobookController extends EventTarget implements PlaybackSource {

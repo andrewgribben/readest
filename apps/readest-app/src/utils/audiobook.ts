@@ -41,6 +41,35 @@ export const isAbsOfflineCapable = (book: {
 /** Books-relative folder holding an ABS audiobook downloaded for offline use. */
 export const getAbsOfflineDir = (bookHash: string): string => `${bookHash}/abs-offline`;
 
+/** Books-relative folder holding an OPDS / BookOrbit audiobook downloaded for offline use. */
+export const getOpdsOfflineDir = (bookHash: string): string => `${bookHash}/opds-offline`;
+
+/**
+ * True when an OPDS or BookOrbit audiobook can be downloaded for offline use:
+ * a streaming stub whose upstream is still configured.
+ */
+export const isOpdsOfflineCapable = (book: {
+  format: Book['format'];
+  filePath?: Book['filePath'];
+}): boolean => book.format === 'OPDSAUDIO' || book.format === 'BOOKORBIT';
+
+/**
+ * True when a streaming audiobook (ABS, OPDS, or BookOrbit) can be kept on
+ * the device for offline playback.
+ */
+export const isStreamingOfflineCapable = (book: {
+  format: Book['format'];
+  filePath?: Book['filePath'];
+  absMediaType?: Book['absMediaType'];
+  metadata?: Book['metadata'];
+}): boolean => isAbsOfflineCapable(book) || isOpdsOfflineCapable(book);
+
+/** True when this device holds an offline copy of a streaming audiobook. */
+export const hasStreamingOfflineDownload = (book: {
+  absDownloadedAt?: Book['absDownloadedAt'];
+  opdsDownloadedAt?: Book['opdsDownloadedAt'];
+}): boolean => !!(book.absDownloadedAt || book.opdsDownloadedAt);
+
 /** Builds the synthetic filePath for an ABS book: `abs://<serverId>/<itemId>`. */
 export const makeAbsFilePath = (serverId: string, itemId: string): string =>
   `${ABS_FILE_SCHEME}${serverId}/${itemId}`;

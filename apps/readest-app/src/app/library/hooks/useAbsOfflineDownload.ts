@@ -5,13 +5,15 @@ import { useQuotaStats } from '@/hooks/useQuotaStats';
 import { useTranslation } from '@/hooks/useTranslation';
 import { transferManager } from '@/services/transferManager';
 import { isAbsOfflineAllowed } from '@/utils/access';
+import { isAbsOfflineCapable, isOpdsOfflineCapable } from '@/utils/audiobook';
 import { navigateToLogin, navigateToProfile } from '@/utils/nav';
 import type { Book } from '@/types/book';
 
 /**
- * "Download for Offline" on an Audiobookshelf book (#6256), a premium feature:
- * entitled users queue the download, everyone else is routed to the upgrade
- * page (or sign-in). Mirrors the offline TTS-audio gate in TTSPlayerSheet.
+ * "Download for Offline" on a streaming audiobook (Audiobookshelf, OPDS, or
+ * BookOrbit): a premium feature. Entitled users queue the download; everyone
+ * else is routed to the upgrade page (or sign-in). Mirrors the offline
+ * TTS-audio gate in TTSPlayerSheet.
  */
 export const useAbsOfflineDownload = () => {
   const _ = useTranslation();
@@ -27,7 +29,10 @@ export const useAbsOfflineDownload = () => {
   const handleBooksOfflineDownload = useCallback(
     (books: Book[]) => {
       if (entitled) {
-        for (const book of books) transferManager.queueAbsOfflineDownload(book, 1);
+        for (const book of books) {
+          if (isAbsOfflineCapable(book)) transferManager.queueAbsOfflineDownload(book, 1);
+          else if (isOpdsOfflineCapable(book)) transferManager.queueOpdsOfflineDownload(book, 1);
+        }
       } else if (user) {
         navigateToProfile(router);
       } else {

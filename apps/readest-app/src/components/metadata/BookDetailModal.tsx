@@ -11,7 +11,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useMetadataEdit } from './useMetadataEdit';
 import { DeleteAction } from '@/types/system';
 import { eventDispatcher } from '@/utils/event';
-import { isAbsOfflineCapable } from '@/utils/audiobook';
+import { isStreamingOfflineCapable } from '@/utils/audiobook';
 import { isWebAppPlatform } from '@/services/environment';
 import DeleteConfirmAlert from '@/components/DeleteConfirmAlert';
 import Dialog from '@/components/Dialog';
@@ -295,7 +295,7 @@ const BookDetailModal: React.FC<BookDetailModalProps> = ({
                 onShare={handleShare}
                 onExport={handleBookExport}
                 onDownloadOffline={
-                  handleBookOfflineDownload && isAbsOfflineCapable(book)
+                  handleBookOfflineDownload && isStreamingOfflineCapable(book)
                     ? handleOfflineDownload
                     : undefined
                 }

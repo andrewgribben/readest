@@ -1,3 +1,4 @@
+import { makeAudiobookProgressSaver } from '@/services/audiobook/progressPersistence';
 // Opens a playback session for an OPDS audiobook (#6224).
 //
 // Kept beside the other OPDS services rather than folded into
@@ -6,15 +7,19 @@
 // shares none of it. All this needs from the audiobook layer is the pieces
 // that are already source-agnostic: AudiobookController, AudiobookTimeline via
 // ABSTrack, and the TTS session manager.
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { BlobAudioClock, HtmlAudioClock } from '@/services/audiobook/AudiobookClock';
 import { AudiobookController } from '@/services/audiobook/AudiobookController';
 import type { AudiobookSource } from '@/services/audiobook/AudiobookController';
+import { NativeAudiobookClock } from '@/services/audiobook/NativeAudiobookClock';
+import { isTauriAppPlatform } from '@/services/environment';
 import { ttsSessionManager } from '@/services/tts/TTSSessionManager';
 import type { TTSMediaBridgeMeta } from '@/services/tts/ttsMediaBridge';
 import { useLibraryStore } from '@/store/libraryStore';
+import type { ABSTrack } from '@/types/audiobookshelf';
 import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
-import { uniqueId } from '@/utils/misc';
+import { getOSPlatform, uniqueId } from '@/utils/misc';
 import { buildOpdsAudioTracks, parseOpdsAudioFilePath } from './audiobook';
 import {
   buildOpdsAudioUrl,
@@ -24,6 +29,7 @@ import {
   probeAudioDurations,
   resolveOpdsAudioAuth,
 } from './audioStream';
+import { loadOpdsOfflineManifest } from './offline';
 
 export interface OpdsAudiobookSession {
   bookKey: string;
@@ -47,7 +53,10 @@ export class OpdsAudioIncompleteError extends Error {
 }
 
 /** Matches the ABS syncer: keep the row live in the store, write to disk rarely. */
-const PERSIST_THROTTLE_MS = 15000;
+
+const isIOSTauri = (): boolean => isTauriAppPlatform() && getOSPlatform() === 'ios';
+const isAndroidTauri = (): boolean => isTauriAppPlatform() && getOSPlatform() === 'android';
+const isLinuxTauri = (): boolean => isTauriAppPlatform() && getOSPlatform() === 'linux';
 
 /**
  * Resume position. OPDS has no server-side playback state, so unlike the ABS
@@ -85,24 +94,26 @@ const recordDuration = (appService: AppService, bookHash: string, duration: numb
   Promise.resolve(appService.saveLibraryBooks(newLibrary)).catch(console.warn);
 };
 
-const makeProgressSaver = (appService: AppService, bookHash: string, duration: number) => {
-  let lastPersistAt = 0;
-  return (positionSec: number, force: boolean): void => {
-    const { library, setLibrary } = useLibraryStore.getState();
-    const idx = library.findIndex((b) => b.hash === bookHash);
-    if (idx === -1) return;
-    const now = Date.now();
-    const progress: [number, number] = [Math.round(positionSec), Math.round(duration)];
-    // Bump updatedAt so Date Read sorting reflects listening activity, the
-    // same way the reader's progress saves do for regular books.
-    const newLibrary = library.slice();
-    newLibrary[idx] = { ...library[idx]!, progress, updatedAt: now };
-    setLibrary(newLibrary);
-
-    if (force || now - lastPersistAt >= PERSIST_THROTTLE_MS) {
-      lastPersistAt = now;
-      Promise.resolve(appService.saveLibraryBooks(newLibrary)).catch(console.warn);
-    }
+const offlineLocalClock = (
+  appService: AppService,
+  tracks: ABSTrack[],
+): {
+  clock: BlobAudioClock | HtmlAudioClock | NativeAudiobookClock;
+  resolveUrl: (path: string) => string;
+} => {
+  const nativeClock = isIOSTauri() || isAndroidTauri();
+  const blobClock = !nativeClock && isLinuxTauri();
+  return {
+    resolveUrl: (path: string) => (nativeClock || blobClock ? path : convertFileSrc(path)),
+    clock: nativeClock
+      ? new NativeAudiobookClock()
+      : blobClock
+        ? new BlobAudioClock(async (path) => {
+            const bytes = await appService.readFile(path, 'None', 'binary');
+            const mimeType = tracks.find((track) => track.contentUrl === path)?.mimeType;
+            return new Blob([bytes], { type: mimeType });
+          })
+        : new HtmlAudioClock(),
   };
 };
 
@@ -123,66 +134,94 @@ export const openOpdsAudiobookSession = async (input: {
     return { bookKey: existing.bookKey, controller: existing.controller as AudiobookController };
   }
 
-  const first = data.tracks[0]!;
-  const auth = await resolveOpdsAudioAuth(data.catalogId, first.href);
+  const offline = book.opdsDownloadedAt
+    ? await loadOpdsOfflineManifest(appService, book.hash)
+    : null;
 
-  // Web has no way to reach an authenticated catalog once the proxy is ruled
-  // out (see audioStream.ts): the element cannot send credentials and a
-  // cross-origin fetch needs CORS the catalog will not send. Fail loudly here
-  // rather than relaying the user's media through Readest's servers.
-  if (opdsAudioBlocker(first.href, auth) === 'web-auth') {
-    throw new OpdsAudioWebAuthError();
+  let tracks: ABSTrack[];
+  let chapters: AudiobookSource['chapters'];
+  let title: string;
+  let author: string;
+  let clock: BlobAudioClock | HtmlAudioClock | NativeAudiobookClock;
+  let resolveUrl: (path: string) => string;
+
+  if (offline) {
+    tracks = await Promise.all(
+      offline.tracks.map(async (track) => ({
+        ...track,
+        contentUrl: await appService.resolveFilePath(track.contentUrl, 'Books'),
+      })),
+    );
+    chapters = offline.chapters;
+    title = data.title || book.title;
+    author = data.author || book.author;
+    ({ clock, resolveUrl } = offlineLocalClock(appService, tracks));
+  } else {
+    const first = data.tracks[0]!;
+    const auth = await resolveOpdsAudioAuth(data.catalogId, first.href);
+
+    // Web has no way to reach an authenticated catalog once the proxy is ruled
+    // out (see audioStream.ts): the element cannot send credentials and a
+    // cross-origin fetch needs CORS the catalog will not send. Fail loudly here
+    // rather than relaying the user's media through Readest's servers.
+    if (opdsAudioBlocker(first.href, auth) === 'web-auth') {
+      throw new OpdsAudioWebAuthError();
+    }
+
+    // Streamable: the element fetches the URL itself, so it issues its own Range
+    // requests straight to the catalog and playback starts on the first few KB.
+    // Otherwise the bytes come through a headered fetch first (native only).
+    const streamable = canStreamOpdsAudio(auth);
+
+    // Durations come from each file's header (a few KB), so nothing has to be
+    // downloaded to build the timeline. That is what lets the non-streamable
+    // path stay lazy: BlobAudioClock fetches a track when it is actually played
+    // and releases the previous one, instead of pulling the whole book up front.
+    const playUrls = data.tracks.map((track) => buildOpdsAudioUrl(track.href));
+    const durations = await probeAudioDurations(
+      playUrls,
+      data.tracks.map((track) => ({ href: track.href, auth })),
+    );
+    tracks = buildOpdsAudioTracks(data.tracks, durations);
+    if (tracks.length === 0) return null;
+    // A track whose duration could not be read is dropped by the layout above,
+    // which closes the gap and shifts every later track earlier. Playing that
+    // silently would lose a chapter and put every seek and saved position in the
+    // wrong place, so an incomplete timeline is refused instead.
+    if (tracks.length !== data.tracks.length) throw new OpdsAudioIncompleteError();
+
+    const mimeByHref = new Map(data.tracks.map((track) => [track.href, track.mimeType]));
+    chapters = [];
+    title = data.title || book.title;
+    author = data.author || book.author;
+    resolveUrl = (contentPath: string) => contentPath;
+    clock = streamable
+      ? new HtmlAudioClock()
+      : new BlobAudioClock((href) =>
+          fetchOpdsAudioBlob(href, auth, mimeByHref.get(href) ?? 'audio/mpeg'),
+        );
   }
 
-  // Streamable: the element fetches the URL itself, so it issues its own Range
-  // requests straight to the catalog and playback starts on the first few KB.
-  // Otherwise the bytes come through a headered fetch first (native only).
-  const streamable = canStreamOpdsAudio(auth);
-
-  // Durations come from each file's header (a few KB), so nothing has to be
-  // downloaded to build the timeline. That is what lets the non-streamable
-  // path stay lazy: BlobAudioClock fetches a track when it is actually played
-  // and releases the previous one, instead of pulling the whole book up front.
-  const playUrls = data.tracks.map((track) => buildOpdsAudioUrl(track.href));
-  const durations = await probeAudioDurations(
-    playUrls,
-    data.tracks.map((track) => ({ href: track.href, auth })),
-  );
-  const tracks = buildOpdsAudioTracks(data.tracks, durations);
-  if (tracks.length === 0) return null;
-  // A track whose duration could not be read is dropped by the layout above,
-  // which closes the gap and shifts every later track earlier. Playing that
-  // silently would lose a chapter and put every seek and saved position in the
-  // wrong place, so an incomplete timeline is refused instead.
-  if (tracks.length !== data.tracks.length) throw new OpdsAudioIncompleteError();
-
-  const mimeByHref = new Map(data.tracks.map((track) => [track.href, track.mimeType]));
-
-  const totalDuration = tracks.reduce((sum, track) => sum + track.duration, 0);
+  const totalDuration = offline
+    ? offline.duration
+    : tracks.reduce((sum, track) => sum + track.duration, 0);
 
   const source: AudiobookSource = {
     itemId: book.hash,
-    title: data.title || book.title,
-    author: data.author || book.author,
+    title,
+    author,
     tracks,
-    // OPDS carries no chapter metadata. With none supplied the timeline falls
-    // back to track boundaries, which for a per-chapter-file audiobook (the
-    // common shape) is the same thing.
-    chapters: [],
-    // Both clocks take the catalog href as-is: the streaming clock loads it
-    // directly, the blob clock hands it to the loader below.
-    resolveUrl: (contentPath: string) => contentPath,
+    // OPDS carries no chapter metadata when streaming. With none supplied the
+    // timeline falls back to track boundaries, which for a per-chapter-file
+    // audiobook (the common shape) is the same thing. An offline BookOrbit
+    // download may carry real chapters in the same manifest shape.
+    chapters,
+    resolveUrl,
     startAt: readLocalPosition(book, totalDuration),
   };
 
   recordDuration(appService, book.hash, totalDuration);
-  const saveProgress = makeProgressSaver(appService, book.hash, totalDuration);
-
-  const clock = streamable
-    ? new HtmlAudioClock()
-    : new BlobAudioClock((href) =>
-        fetchOpdsAudioBlob(href, auth, mimeByHref.get(href) ?? 'audio/mpeg'),
-      );
+  const saveProgress = makeAudiobookProgressSaver(appService, book.hash, totalDuration);
 
   const controller = new AudiobookController(source, clock, {
     onTick: (position) => saveProgress(position, false),
