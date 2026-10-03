@@ -743,6 +743,8 @@ export interface PairedAudiobookBookOrbitSource {
 
 export interface PairedAudiobook {
   version: 1;
+  /** Actual recording position, device-local; never inferred from ebook progress. */
+  listeningProgress?: { position: number; duration: number; updatedAt: number };
   title?: string;
   narrator?: string;
   files: AudiobookFile[];

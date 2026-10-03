@@ -50,6 +50,10 @@ import {
 } from './pairedAudiobook';
 import { SKIP_BACKWARD_SEC, SKIP_FORWARD_SEC } from '@/services/playback/playbackSource';
 import {
+  PairedListeningReporter,
+  pairedListeningPosition,
+} from '@/services/audiobook/pairedListeningReporter';
+import {
   stripInlineReadingAnnotations,
   stripInlineReadingAnnotationsFromSSML,
 } from './inlineAnnotations';
@@ -188,6 +192,8 @@ export class TTSController extends EventTarget {
   #mediaOverlaySection: MediaOverlaySection | null = null;
   #useNarration = true;
   #pairedAudiobook: PairedAudiobook | null = null;
+  #pairedListening: PairedListeningReporter | null = null;
+  #pairedSeekPosition: { position: number; duration: number } | null = null;
 
   ttsLang: string = '';
   ttsRate: number = 1.0;
@@ -259,6 +265,7 @@ export class TTSController extends EventTarget {
 
   #terminate(reason: 'ended' | 'error') {
     if (this.#terminated) return;
+    this.#pairedListening?.close();
     this.#terminated = true;
     stopAudioKeepAlive();
     queueMicrotask(() => {
@@ -430,6 +437,16 @@ export class TTSController extends EventTarget {
       if (this.useNarration && (await this.ttsMediaOverlayClient.init())) {
         this.ttsClient = this.ttsMediaOverlayClient;
       }
+    }
+    if (this.#pairedAudiobook && this.appService && this.bookKey) {
+      const { createPairedProgressHooks } = await import(
+        '@/services/audiobook/pairedProgressPersistence'
+      );
+      this.#pairedListening = new PairedListeningReporter(
+        () => this.state === 'playing' && this.narrationActive,
+        () => this.getPairedListeningPosition()?.position ?? null,
+        createPairedProgressHooks(this.appService, this.bookKey, this.#pairedAudiobook),
+      );
     }
   }
 
@@ -1252,6 +1269,7 @@ export class TTSController extends EventTarget {
       (await this.ttsClient.seekToChunkPosition?.(target.withinMediaSec))
     ) {
       this.#dispatchSeekLocation(range);
+      this.#reportPairedSeek(target);
       return;
     }
     const isPlaying = this.state === 'playing';
@@ -1260,6 +1278,21 @@ export class TTSController extends EventTarget {
     await this.stop(isPlaying);
     if (!isPlaying) this.state = 'forward-paused';
     await this.#resumeAt(target, range, isPlaying);
+    this.#reportPairedSeek(target);
+  }
+
+  #reportPairedSeek(target: { index: number; withinMediaSec: number }) {
+    const par = this.#mediaOverlaySection?.pars[target.index];
+    if (!par || !this.#pairedAudiobook || !this.narrationActive) return;
+    const position = pairedListeningPosition(
+      this.#pairedAudiobook,
+      par.audioHref,
+      par.clipBegin + target.withinMediaSec,
+    );
+    if (position) {
+      this.#pairedSeekPosition = position;
+      this.#pairedListening?.seek(position.position);
+    }
   }
 
   // Continue (or park a paused session) at a timeline target once the current
@@ -1305,6 +1338,17 @@ export class TTSController extends EventTarget {
       audioHref: par.audioHref,
       seconds: par.clipBegin + (this.ttsClient.getChunkPosition?.() ?? 0),
     };
+  }
+
+  getPairedListeningPosition(): { position: number; duration: number } | null {
+    if (!this.narrationActive || !this.#pairedAudiobook) return null;
+    if (this.#pairedSeekPosition && this.state !== 'playing') return this.#pairedSeekPosition;
+    if (this.state === 'playing') this.#pairedSeekPosition = null;
+    if (this.ttsClient.getChunkPosition?.() == null) return null;
+    const current = this.#narrationPosition();
+    return current
+      ? pairedListeningPosition(this.#pairedAudiobook, current.audioHref, current.seconds)
+      : null;
   }
 
   // Timeline seconds of a recording position inside the current section, or
@@ -1356,6 +1400,7 @@ export class TTSController extends EventTarget {
     }
     const range = this.#rangeAtSeekTarget(located.sentence, located.withinMediaSec);
     await this.#resumeAt(located, range, isPlaying);
+    this.#reportPairedSeek(located);
   }
 
   async #initTTSForNextSection(): Promise<boolean> {
@@ -1412,6 +1457,7 @@ export class TTSController extends EventTarget {
   // Falls back to a full stop only at end of book, where there is nothing
   // left to pause on.
   async #stopAtChapterBoundary() {
+    this.#pairedListening?.pause();
     if (await this.#initTTSForNextSection()) {
       this.state = 'forward-paused';
       this.#syncAudioKeepAlive();
@@ -1676,6 +1722,7 @@ export class TTSController extends EventTarget {
   }
 
   async pause() {
+    this.#pairedListening?.pause();
     this.state = 'paused';
     this.#syncAudioKeepAlive();
     if (!(await this.ttsClient.pause().catch((e) => this.error(e)))) {
@@ -1974,6 +2021,7 @@ export class TTSController extends EventTarget {
         this.#suppressMarkHighlight = false;
       }
     }
+    this.#pairedListening?.start();
     return located;
   }
 
@@ -2172,6 +2220,7 @@ export class TTSController extends EventTarget {
   }
 
   async shutdown() {
+    this.#pairedListening?.close();
     stopAudioKeepAlive();
     await this.stop();
     this.#clearAllHighlights();

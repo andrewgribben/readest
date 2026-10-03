@@ -101,9 +101,13 @@ is still device-local, recording the server, item and track list
 (`PairedAudiobook.source`); playback streams each file with the server's current
 access token, so it needs that association's server row and a network
 connection. It is otherwise the same device-local association,
-and removing it only unpairs. Listening position is not reported back to the
-Audiobookshelf server while reading along; reading progress still syncs through
-Readest as usual.
+and removing it only unpairs. Actual listening position is saved every 15 seconds
+and flushed on pause or session shutdown, using the same audiobook library
+entry and Audiobookshelf listening-session reporting as standalone playback.
+BookOrbit pairings likewise report their actual recording position through its
+playback-state API. Local pairings retain a device-local listening checkpoint.
+These saves do not move the ebook or change how a new paired session chooses its
+starting position; reading progress still syncs through Readest as usual.
 
 ### Using it
 

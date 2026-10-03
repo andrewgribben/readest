@@ -1,3 +1,4 @@
+import { makeAudiobookProgressSaver } from '@/services/audiobook/progressPersistence';
 // Opens a playback session for an OPDS audiobook (#6224).
 //
 // Kept beside the other OPDS services rather than folded into
@@ -47,7 +48,6 @@ export class OpdsAudioIncompleteError extends Error {
 }
 
 /** Matches the ABS syncer: keep the row live in the store, write to disk rarely. */
-const PERSIST_THROTTLE_MS = 15000;
 
 /**
  * Resume position. OPDS has no server-side playback state, so unlike the ABS
@@ -83,27 +83,6 @@ const recordDuration = (appService: AppService, bookHash: string, duration: numb
   newLibrary[idx] = { ...library[idx]!, duration };
   setLibrary(newLibrary);
   Promise.resolve(appService.saveLibraryBooks(newLibrary)).catch(console.warn);
-};
-
-const makeProgressSaver = (appService: AppService, bookHash: string, duration: number) => {
-  let lastPersistAt = 0;
-  return (positionSec: number, force: boolean): void => {
-    const { library, setLibrary } = useLibraryStore.getState();
-    const idx = library.findIndex((b) => b.hash === bookHash);
-    if (idx === -1) return;
-    const now = Date.now();
-    const progress: [number, number] = [Math.round(positionSec), Math.round(duration)];
-    // Bump updatedAt so Date Read sorting reflects listening activity, the
-    // same way the reader's progress saves do for regular books.
-    const newLibrary = library.slice();
-    newLibrary[idx] = { ...library[idx]!, progress, updatedAt: now };
-    setLibrary(newLibrary);
-
-    if (force || now - lastPersistAt >= PERSIST_THROTTLE_MS) {
-      lastPersistAt = now;
-      Promise.resolve(appService.saveLibraryBooks(newLibrary)).catch(console.warn);
-    }
-  };
 };
 
 export const openOpdsAudiobookSession = async (input: {
@@ -176,7 +155,7 @@ export const openOpdsAudiobookSession = async (input: {
   };
 
   recordDuration(appService, book.hash, totalDuration);
-  const saveProgress = makeProgressSaver(appService, book.hash, totalDuration);
+  const saveProgress = makeAudiobookProgressSaver(appService, book.hash, totalDuration);
 
   const clock = streamable
     ? new HtmlAudioClock()
