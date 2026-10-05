@@ -463,6 +463,10 @@ export class TTSController extends EventTarget {
     return this.ttsClient === this.ttsMediaOverlayClient;
   }
 
+  get recordedAudio(): boolean {
+    return this.narrationActive;
+  }
+
   // Per-book opt-in, defaulting on: only an explicit synthetic-voice choice for
   // this book turns narration off.
   set useNarration(value: boolean) {
@@ -717,7 +721,11 @@ export class TTSController extends EventTarget {
     return ssml;
   }
 
-  async getPairedStartCandidates(): Promise<{ listening: number | null; reading: number } | null> {
+  async getPairedStartCandidates(): Promise<{
+    listening: number | null;
+    reading: number;
+    live?: boolean;
+  } | null> {
     const association = this.#pairedAudiobook;
     const tts = this.#getTts();
     if (!association || !this.narrationActive || !(tts instanceof MediaOverlayTTS)) return null;
@@ -728,8 +736,21 @@ export class TTSController extends EventTarget {
     if (!reading) return null;
     const { pairedAudiobookEntry } = await import('@/services/audiobook/pairedProgressPersistence');
     const entry = pairedAudiobookEntry(association, false);
+    const car = await import('@/services/audiobook/carPlayback');
+    const active = await car.getActiveCarRecording();
+    if (active && (active.hash === entry?.hash || active.hash === this.bookKey?.split('-')[0])) {
+      return { listening: active.position, reading: reading.position, live: true };
+    }
+    const journal =
+      entry && this.appService
+        ? await (await import('@/services/audiobook/carPlayback')).importCarListeningCheckpoint(
+            this.appService,
+            entry,
+          )
+        : null;
     const checkpoint = selectListeningCheckpoint(
       [
+        journal,
         association.listeningProgress,
         entry?.progress
           ? {

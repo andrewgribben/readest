@@ -155,4 +155,8 @@ pub struct PlayoutPositionResponse {
     pub index: i32,
     pub position_ms: f64,
     pub playing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_book_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_position_ms: Option<f64>,
 }

@@ -57,6 +57,8 @@ internal data class AndroidAutoBook(
     val configPath: String?,
     val coverHash: String?,
     val artworkReady: Boolean,
+    val recordedAudio: JSONObject? = null,
+    val positionChoice: JSONObject? = null,
 )
 
 internal object MediaSessionActivationState {
@@ -123,6 +125,19 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
     private var coldTtsBookHash: String? = null
     private var coldTtsConfigPath: String? = null
     private var coldTtsSavedCfi: String? = null
+    private var recordedBook: AndroidAutoBook? = null
+    private var recordedTracks: List<RecordedAudioTrack> = emptyList()
+    private var recordedStarted = false
+    private var pendingAudioChoice: JSONObject? = null
+    private var nativeAudioChoice = false
+    private val recordedTick = object : Runnable {
+        override fun run() {
+            if (recordedBook == null) return
+            if (player.isPlaying) persistRecordedPosition()
+            updatePlaybackState()
+            mainHandler.postDelayed(this, 15_000L)
+        }
+    }
 
     // True only between session activation (TTS playback started) and
     // deactivation. Android Auto can bind this service at any time to browse,
@@ -274,6 +289,8 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
         // car is told it failed. Generous enough to cover a cold WebView plus
         // a cloud download, short enough to beat Android Auto's own timeout.
         private const val SELECTION_TIMEOUT_MS = 20_000L
+        private const val ACTION_START_COLD_AUDIO = "com.readest.native_tts.START_COLD_AUDIO"
+        private val coldAudioIntentToken = java.util.UUID.randomUUID().toString()
         // Upper bound on the published browse tree, mirroring
         // MAX_ANDROID_AUTO_BOOKS on the JS side. The exported service is
         // bindable by any app, so the native side enforces its own ceiling
@@ -430,6 +447,8 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
                                 .trim()
                                 .takeIf { MD5_PATTERN.matches(it) },
                             artworkReady = item.optBoolean("artworkReady", false),
+                            recordedAudio = item.optJSONObject("recordedAudio"),
+                            positionChoice = item.optJSONObject("positionChoice"),
                         )
                     )
                 }
@@ -446,6 +465,7 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
             Handler(Looper.getMainLooper()).post {
                 service.notifyChildrenChanged(MEDIA_ROOT_ID)
                 service.notifyChildrenChanged(LIBRARY_ROOT_ID)
+                service.publishAudioChoice(parsed.mapNotNull { it.positionChoice }.firstOrNull())
             }
         }
 
@@ -462,6 +482,28 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
 
         @Volatile
         private var instance: MediaPlaybackService? = null
+
+        /** Transfer the actual native clock when the phone attaches to cold playback. */
+        fun takeRecordedPlayback(path: String): Long? {
+            val service = instance ?: return null
+            if (service.recordedBook == null) return null
+            val track = service.recordedTracks.getOrNull(service.player.currentMediaItemIndex)
+            val position = service.player.currentPosition.takeIf { service.recordedStarted && track?.path == path }
+            service.player.pause()
+            service.clearRecordedPlayback()
+            service.player.stop()
+            service.player.setMediaItem(MediaItem.fromUri("asset:///silence.mp3"))
+            service.player.repeatMode = Player.REPEAT_MODE_ONE
+            service.player.prepare()
+            return position
+        }
+
+        fun recordedPlaybackPosition(): Pair<String, Long>? {
+            val service = instance ?: return null
+            val book = service.recordedBook ?: return null
+            if (!service.recordedStarted) return null
+            return book.hash to service.recordedGlobalPositionMs()
+        }
 
         // Deactivate via an in-process call instead of stopService: while a
         // media browser client (Android Auto) keeps the service bound,
@@ -509,6 +551,7 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
         // refreshed regardless so a not-yet-created service picks them up when
         // it activates.
         fun pushMetadata(sessionId: String?, title: String, artist: String, artwork: Bitmap?) {
+            if (instance?.recordedBook != null) return
             if (!MediaSessionActivationState.acceptsUpdate(sessionId)) return
             currentTitle = title
             currentArtist = artist
@@ -526,6 +569,7 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
             position: Long?,
             duration: Long?,
         ) {
+            if (instance?.recordedBook != null) return
             if (!MediaSessionActivationState.acceptsUpdate(sessionId)) return
             if (position != null) currentPositionMs = position
             if (duration != null) currentDurationMs = duration
@@ -582,10 +626,19 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
 
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (recordedBook != null && !isPlaying) persistRecordedPosition()
                 updatePlaybackState()
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (recordedBook != null && playbackState == Player.STATE_ENDED) persistRecordedPosition()
                 updatePlaybackState()
+            }
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                if (recordedBook == null) return
+                persistRecordedPosition()
+                mediaSession?.setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_ERROR, currentPositionMs, 1f)
+                    .setErrorMessage(PlaybackStateCompat.ERROR_CODE_APP_ERROR, getString(R.string.readest_auto_selection_failed)).build())
+                stateBuilder.setErrorMessage(PlaybackStateCompat.ERROR_CODE_UNKNOWN_ERROR, "")
             }
         })
     }
@@ -628,6 +681,7 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
 
     private fun deactivateSession() {
         if (!sessionActive) return
+        clearRecordedPlayback()
         clearColdTtsPlayback()
         sessionActive = false
 
@@ -940,6 +994,7 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
 
     private inner class SessionCallback : MediaSessionCompat.Callback() {
         override fun onPlay() {
+            if (pendingAudioChoice != null) return
             // The session stays command-ready for the whole life of the bound
             // service so the car can browse while nothing plays, which means a
             // transport command can arrive with no session behind it: a
@@ -959,6 +1014,7 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
                 onPlayFromMediaId(lastBookHash?.let { "$BOOK_MEDIA_ID_PREFIX$it" }, null)
                 return
             }
+            if (recordedBook != null && recordedStarted) { player.play(); return }
             player.play()
             pluginEventTrigger?.invoke("media-session-play", JSObject())
             updatePlaybackState()
@@ -966,6 +1022,7 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
 
         override fun onPause() {
             if (!sessionActive) return
+            if (recordedBook != null) { player.pause(); persistRecordedPosition(); return }
             // An explicit user pause must stick: cancel any pending
             // resume-after-interruption.
             resumeOnFocusGain = false
@@ -987,12 +1044,30 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
             updatePlaybackState()
         }
 
+        override fun onStop() {
+            if (pendingAudioChoice != null) {
+                val choice = pendingAudioChoice!!
+                if (recordedBook == null) pluginEventTrigger?.invoke("media-session-position-choice", JSObject().apply {
+                    put("id", choice.getLong("id")); put("selection", JSONObject.NULL)
+                })
+                pendingAudioChoice = null
+            }
+            if (recordedBook != null) {
+                clearRecordedPlayback()
+                if (sessionActive) deactivateSession() else {
+                    ServiceCompat.stopForeground(this@MediaPlaybackService, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
+            } else onPause()
+        }
+
         // Next/previous just relay the intent to the WebView, which owns the
         // real paragraph navigation and pushes the new metadata/state back.
         // Seeking the silent keep-alive player here does nothing useful and
         // muddied the transition, so the JS side (ttsMediaBridge) holds an
         // optimistic playing state until the skipped-to segment speaks.
         override fun onSkipToNext() {
+            if (recordedBook != null && recordedStarted) { seekRecorded(recordedGlobalPositionMs() / 1000.0 + 30); return }
             if (coldTtsActive) {
                 skipColdTts(1)
                 return
@@ -1001,6 +1076,7 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
         }
 
         override fun onSkipToPrevious() {
+            if (recordedBook != null && recordedStarted) { seekRecorded(recordedGlobalPositionMs() / 1000.0 - 15); return }
             if (coldTtsActive) {
                 skipColdTts(-1)
                 return
@@ -1012,6 +1088,7 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
         // the real audio timeline (seekToTime), and optimistically move the
         // thumb so the lock screen feels responsive before the seek lands.
         override fun onSeekTo(pos: Long) {
+            if (recordedBook != null && recordedStarted) { seekRecorded(pos / 1000.0); return }
             currentPositionMs = pos
             pluginEventTrigger?.invoke("media-session-seek", JSObject().apply { put("position", pos) })
             val state = if (player.isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
@@ -1021,6 +1098,11 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
         }
 
         override fun onPlayFromMediaId(mediaId: String?, extras: Bundle?) {
+            if (mediaId?.startsWith("audio-choice:") == true) {
+                val parts = mediaId.split(":")
+                if (parts.size == 3 && parts[1] == pendingAudioChoice?.optLong("id").toString()) resolveAudioChoice(parts[2])
+                return
+            }
             if (sessionActive && mediaId == CURRENT_READING_MEDIA_ID) {
                 onPlay()
                 return
@@ -1055,7 +1137,26 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
             // Normal case: the app process is alive in the background. Let the
             // global bridge select the book and start the existing ebook TTS or
             // audiobook player without trying to display phone UI in the car.
+            if (selectedBook?.recordedAudio != null && (!sessionActive || recordedBook != null)) {
+                ContextCompat.startForegroundService(this@MediaPlaybackService,
+                    Intent(this@MediaPlaybackService, MediaPlaybackService::class.java).apply {
+                        action = ACTION_START_COLD_AUDIO
+                        putExtra(EXTRA_BOOK_HASH, selectedBook.hash)
+                        putExtra("coldAudioToken", coldAudioIntentToken)
+                    })
+                return
+            }
+
+            if (recordedBook != null) {
+                clearRecordedPlayback()
+                player.stop()
+                player.setMediaItem(MediaItem.fromUri("asset:///silence.mp3"))
+                player.repeatMode = Player.REPEAT_MODE_ONE
+                player.prepare()
+            }
             if (dispatchOrQueueBookPlayback(hash)) return
+
+
 
             // A cold Android Auto selection cannot wake Readest's Activity:
             // background services do not receive background-activity-launch
@@ -1088,18 +1189,173 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
         override fun onPlayFromSearch(query: String?, extras: Bundle?) {
             onPlay()
         }
+
+        override fun onCustomAction(action: String?, extras: Bundle?) {
+            if (action?.startsWith("audio-choice:") == true) {
+                val parts = action.split(":")
+                if (parts.size == 3 && parts[1] == pendingAudioChoice?.optLong("id").toString()) resolveAudioChoice(parts[2])
+            } else if (action == "skip-back-15") onSkipToPrevious()
+            else if (action == "skip-forward-30") onSkipToNext()
+        }
+    }
+
+    private fun recordedGlobalPositionMs(): Long {
+        val track = recordedTracks.getOrNull(player.currentMediaItemIndex) ?: return 0L
+        return (track.startOffset * 1000).toLong() + player.currentPosition
+    }
+
+    private fun persistRecordedPosition() {
+        val audio = recordedBook?.recordedAudio ?: return
+        if (!recordedStarted) return
+        try {
+            val path = audio.getString("journalPath")
+            val checkpoint = JSONObject().apply {
+                put("position", (recordedGlobalPositionMs() / 1000.0).coerceIn(0.0, recordedTracks.sumOf { it.duration }))
+                put("duration", recordedTracks.sumOf { it.duration })
+                put("updatedAt", System.currentTimeMillis())
+                put("audioHash", audio.getString("audioHash"))
+            }
+            val file = File(path)
+            file.parentFile?.mkdirs()
+            val temp = File("$path.tmp")
+            temp.writeText(checkpoint.toString())
+            check(temp.renameTo(file)) { "Could not persist recording checkpoint" }
+        } catch (error: Exception) {
+            Log.w("MediaPlaybackService", "Recording checkpoint persistence failed", error)
+        }
+    }
+
+    private fun clearRecordedPlayback() {
+        persistRecordedPosition()
+        mainHandler.removeCallbacks(recordedTick)
+        recordedBook = null
+        recordedTracks = emptyList()
+        recordedStarted = false
+        pendingAudioChoice = null
+    }
+
+    private fun requestRecordedPlayback(book: AndroidAutoBook) {
+        clearRecordedPlayback()
+        clearColdTtsPlayback()
+        player.pause()
+        val audio = book.recordedAudio ?: return
+        try {
+            val rows = audio.getJSONArray("tracks")
+            val tracks = (0 until rows.length()).map { index ->
+                val row = rows.getJSONObject(index)
+                val path = row.getString("path")
+                require(File(path).isFile) { "Downloaded recording is unavailable" }
+                RecordedAudioTrack(path, row.getDouble("startOffset"), row.getDouble("duration"))
+            }
+            require(tracks.isNotEmpty())
+            recordedBook = book
+            recordedTracks = tracks
+            currentBookHash = book.hash
+            currentTitle = book.title
+            currentArtist = book.author
+            currentDurationMs = (tracks.sumOf { it.duration } * 1000).toLong()
+            var listening = if (audio.isNull("listening")) null else audio.getDouble("listening")
+            val journal = File(audio.getString("journalPath"))
+            if (journal.isFile) {
+                val checkpoint = JSONObject(journal.readText())
+                if (checkpoint.optLong("updatedAt") >= audio.optLong("capturedAt") &&
+                    kotlin.math.abs(checkpoint.optDouble("duration") - currentDurationMs / 1000.0) <= 1.0) {
+                    listening = checkpoint.optDouble("position").takeIf { it.isFinite() && it >= 0 }
+                }
+            }
+            val reading = if (audio.isNull("reading")) null else audio.getDouble("reading")
+            cancelSelectionWatchdog()
+            if (listening != null && reading != null && RecordedAudioTimeline.needsChoice(listening, reading)) {
+                publishAudioChoice(JSONObject().apply {
+                    put("id", System.currentTimeMillis()); put("bookHash", book.hash)
+                    put("listening", listening); put("reading", reading)
+                }, true)
+            } else startRecordedAt(listening ?: reading ?: 0.0)
+        } catch (error: Exception) {
+            clearRecordedPlayback()
+            cancelSelectionWatchdog()
+            mediaSession?.setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_ERROR, 0L, 1f)
+                .setErrorMessage(PlaybackStateCompat.ERROR_CODE_APP_ERROR, getString(R.string.readest_auto_selection_failed)).build())
+            stateBuilder.setErrorMessage(PlaybackStateCompat.ERROR_CODE_UNKNOWN_ERROR, "")
+        }
+    }
+
+    private fun startRecordedAt(seconds: Double) {
+        val book = recordedBook ?: return
+        pendingAudioChoice = null
+        ownsAudioFocus = true
+        activateSession()
+        val target = RecordedAudioTimeline.locate(recordedTracks, seconds)
+        player.repeatMode = Player.REPEAT_MODE_OFF
+        player.setMediaItems(recordedTracks.map { MediaItem.fromUri(Uri.fromFile(File(it.path))) }, target.index, target.positionMs)
+        player.prepare()
+        recordedStarted = true
+        player.play()
+        saveLastBook(this, book.hash, book.title, book.author)
+        resetArtworkForBook(book.hash)
+        applyMetadata()
+        mainHandler.removeCallbacks(recordedTick)
+        mainHandler.post(recordedTick)
+    }
+
+    private fun seekRecorded(seconds: Double) {
+        val target = RecordedAudioTimeline.locate(recordedTracks, seconds)
+        player.seekTo(target.index, target.positionMs)
+        persistRecordedPosition()
+        updatePlaybackState()
+    }
+
+    private fun publishAudioChoice(choice: JSONObject?, native: Boolean = false) {
+        if (choice == null && nativeAudioChoice && recordedBook != null) return
+        pendingAudioChoice = choice
+        nativeAudioChoice = native
+        if (choice != null) {
+            cancelSelectionWatchdog()
+            mediaSession?.setPlaybackState(PlaybackStateCompat.Builder()
+                .setState(PlaybackStateCompat.STATE_PAUSED, 0L, 1f)
+                .addCustomAction("audio-choice:${choice.getLong("id")}:listening", getString(R.string.readest_auto_resume_audio), android.R.drawable.ic_media_play)
+                .addCustomAction("audio-choice:${choice.getLong("id")}:reading", getString(R.string.readest_auto_start_ebook), android.R.drawable.ic_menu_mylocation)
+                .build())
+        }
+        notifyChildrenChanged(MEDIA_ROOT_ID)
+        notifyChildrenChanged("audio-position-choice")
+    }
+
+    private fun resolveAudioChoice(selection: String) {
+        if (selection != "listening" && selection != "reading") return
+        val choice = pendingAudioChoice ?: return
+        if (recordedBook != null && nativeAudioChoice) {
+            startRecordedAt(choice.getDouble(selection))
+        } else {
+            pluginEventTrigger?.invoke("media-session-position-choice", JSObject().apply {
+                put("id", choice.getLong("id")); put("selection", selection)
+            })
+            pendingAudioChoice = null
+        }
     }
 
     private fun updatePlaybackState() {
         if (!sessionActive) return
+        if (pendingAudioChoice != null) return
+        if (recordedBook != null) {
+            currentPositionMs = recordedGlobalPositionMs()
+        }
         val state = if (player.isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
         // Report the WebView playback position (currentPositionMs), NOT the
         // silent keep-alive player's position. silence.mp3 is a 10s loop, so
         // player.currentPosition saturates at ~10s and would freeze the car /
         // lock-screen scrubber there while the book plays on.
-        mediaSession?.setPlaybackState(
-            stateBuilder.setState(state, currentPositionMs, 1f).build()
-        )
+        val isRecorded = recordedBook != null || libraryBooks.any {
+            it.hash == currentBookHash && (it.isAudiobook || it.recordedAudio != null)
+        }
+        val builder = if (isRecorded) PlaybackStateCompat.Builder().setActions(
+            PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PLAY_PAUSE or
+            PlaybackStateCompat.ACTION_PAUSE or PlaybackStateCompat.ACTION_STOP or
+            PlaybackStateCompat.ACTION_SEEK_TO or PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID
+        ).addCustomAction("skip-back-15", getString(R.string.readest_auto_back_15), android.R.drawable.ic_media_rew)
+            .addCustomAction("skip-forward-30", getString(R.string.readest_auto_forward_30), android.R.drawable.ic_media_ff)
+            else stateBuilder
+        mediaSession?.setPlaybackState(builder.setState(state, currentPositionMs, 1f).build())
         showNotification(state)
     }
 
@@ -1506,6 +1762,21 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
                 )
             )
         }
+        val choice = pendingAudioChoice
+        if (choice != null && parentId == MEDIA_ROOT_ID) {
+            items.add(MediaBrowserCompat.MediaItem(MediaDescriptionCompat.Builder()
+                .setMediaId("audio-position-choice").setTitle(getString(R.string.readest_auto_choose_position)).build(),
+                MediaBrowserCompat.MediaItem.FLAG_BROWSABLE))
+        }
+        if (choice != null && parentId == "audio-position-choice") {
+            for ((selection, label) in listOf("listening" to R.string.readest_auto_resume_audio, "reading" to R.string.readest_auto_start_ebook)) {
+                val seconds = choice.optDouble(selection).toLong()
+                val timestamp = String.format("%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
+                items.add(MediaBrowserCompat.MediaItem(MediaDescriptionCompat.Builder()
+                    .setMediaId("audio-choice:${choice.getLong("id")}:$selection").setTitle(getString(label)).setSubtitle(timestamp).build(),
+                    MediaBrowserCompat.MediaItem.FLAG_PLAYABLE))
+            }
+        }
         if (parentId == LIBRARY_ROOT_ID) {
             for (book in libraryBooks) {
                 val description = MediaDescriptionCompat.Builder()
@@ -1527,6 +1798,13 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
+            ACTION_START_COLD_AUDIO -> {
+                if (intent.getStringExtra("coldAudioToken") != coldAudioIntentToken) return START_NOT_STICKY
+                showNotification(PlaybackStateCompat.STATE_BUFFERING)
+                val book = libraryBooks.firstOrNull { it.hash == intent.getStringExtra(EXTRA_BOOK_HASH) }
+                if (book?.recordedAudio != null) requestRecordedPlayback(book)
+                else { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE); stopSelf(startId) }
+            }
             ACTION_START_COLD_EPUB -> {
                 val hash = intent.getStringExtra(EXTRA_BOOK_HASH)
                 if (hash != null) {
@@ -1579,6 +1857,7 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
     }
 
     override fun onDestroy() {
+        clearRecordedPlayback()
         instance = null
         cancelSelectionWatchdog()
         clearColdTtsPlayback()

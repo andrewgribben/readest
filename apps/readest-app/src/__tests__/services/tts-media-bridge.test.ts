@@ -108,6 +108,22 @@ describe('TTSMediaBridge', () => {
     expect(controller.forward).toHaveBeenCalled();
   });
 
+  test('play starts a newly selected stopped audiobook', async () => {
+    await bind();
+    controller.state = 'stopped';
+    fake.handlers.get('play')!({} as MediaSessionActionDetails);
+    expect(controller.start).toHaveBeenCalledOnce();
+  });
+
+  test('recorded audio next and previous use time skips instead of chapters', async () => {
+    Object.assign(controller, { kind: 'audiobook' });
+    await bind();
+    fake.handlers.get('nexttrack')!({} as MediaSessionActionDetails);
+    fake.handlers.get('previoustrack')!({} as MediaSessionActionDetails);
+    expect(controller.forward).toHaveBeenCalledWith(true);
+    expect(controller.backward).toHaveBeenCalledWith(true);
+  });
+
   // 'play'/'pause' are reused by audio-focus events (iOS interruptions,
   // Android focus loss, headphone unplug). As toggles they would INVERT when
   // state already matches — unplugging headphones while paused would start
