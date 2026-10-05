@@ -1540,9 +1540,7 @@ export class TTSController extends EventTarget {
   //     re-read by the tts.resume() that the public start() issues on Play,
   //     leaving the controls "playing" with no audio. Untouched, resume()'s
   //     own nothing-current -> next() fallback bootstraps the first paragraph.
-  //   - No pause(). Nothing is speaking at this instant (the previous chunk
-  //     finished), so its ttsClient.pause()/stop() fallback is dead weight.
-  //     'forward-paused' rather than plain 'paused' because handleTogglePlay
+  //   - 'forward-paused' rather than plain 'paused' because handleTogglePlay
   //     routes exact 'paused' to the lightweight ttsClient.resume() — a no-op
   //     when nothing was ever spoken — and everything else to start().
   //
@@ -1550,6 +1548,9 @@ export class TTSController extends EventTarget {
   // left to pause on.
   async #stopAtChapterBoundary() {
     this.#pairedListening?.pause();
+    // Recorded narration deliberately keeps its clock rolling between chunks.
+    // Ending a chunk is therefore not enough to silence a chapter sleep stop.
+    await this.ttsClient.stop(false);
     if (await this.#initTTSForNextSection()) {
       this.state = 'forward-paused';
       this.#syncAudioKeepAlive();
