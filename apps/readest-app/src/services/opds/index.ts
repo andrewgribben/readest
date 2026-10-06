@@ -2,9 +2,15 @@ export { syncSubscribedCatalogs } from './autoDownload';
 export {
   checkFeedForNewItems,
   collectNewAudioEntries,
+  checkFeedForAllItems,
   getAcquisitionLink,
   getEntryId,
 } from './feedChecker';
+export {
+  refreshCatalogLibrary,
+  type RefreshCatalogProgress,
+  type RefreshCatalogResult,
+} from './refreshCatalogLibrary';
 export {
   loadSubscriptionState,
   saveSubscriptionState,

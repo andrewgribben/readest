@@ -1,12 +1,7 @@
 import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
 import type { OPDSCatalog } from '@/types/opds';
-import { downloadFile } from '@/libs/storage';
-import { getFileExtFromMimeType } from '@/libs/document';
-import { needsProxy, getProxiedURL, probeAuth, probeFilename } from '@/app/opds/utils/opdsReq';
-import { resolveURL, parseMediaType, getFileExtFromPath } from '@/app/opds/utils/opdsUtils';
-import { normalizeCustomHeaders } from '@/utils/customHeaders';
-import { READEST_OPDS_USER_AGENT } from '@/services/constants';
+import { resolveURL } from '@/app/opds/utils/opdsUtils';
 import type { BookOrbitSettings } from '@/types/settings';
 import { ensureOpdsAudiobookStub } from './audiobookStub';
 import { applyOPDSCover } from './cover';
@@ -18,6 +13,7 @@ import {
   pruneKnownEntryIds,
 } from './subscriptionState';
 import { findBookByOPDSSources, upsertOPDSSourceMapping } from './sourceMap';
+import { downloadAcquisitionFile } from './acquisitionDownload';
 import {
   isRetryEligible,
   DOWNLOAD_CONCURRENCY,
@@ -32,7 +28,7 @@ import type {
   FailedEntry,
 } from './types';
 import { runWithConcurrency } from '@/utils/concurrency';
-import { uniqueId } from '@/utils/misc';
+import { useOPDSProgressStore } from '@/store/opdsProgressStore';
 
 /**
  * Download a single item and import it into the library.
@@ -42,7 +38,7 @@ async function downloadAndImport(
   catalog: OPDSCatalog,
   appService: AppService,
   books: Book[],
-): Promise<Book> {
+): Promise<{ book: Book; downloaded: boolean }> {
   const url = resolveURL(item.acquisitionHref, item.baseURL);
   // Identity gate (#5859): if this OPDS source already maps to a book still in
   // the library, it is already imported. Re-importing it would mint a NEW
@@ -68,69 +64,19 @@ async function downloadAndImport(
   }
   if (existing) {
     console.log(`[OPDS] "${item.title}" already imported for this source — skipping re-download`);
-    return existing;
-  }
-  const username = catalog.username ?? '';
-  const password = catalog.password ?? '';
-  const customHeaders = normalizeCustomHeaders(catalog.customHeaders);
-  const useProxy = needsProxy(url);
-
-  let downloadUrl = useProxy ? getProxiedURL(url, '', true, customHeaders) : url;
-  const headers: Record<string, string> = {
-    'User-Agent': READEST_OPDS_USER_AGENT,
-    Accept: '*/*',
-    ...(!useProxy ? customHeaders : {}),
-  };
-
-  if (username || password) {
-    const authHeader = await probeAuth(url, username, password, useProxy, customHeaders);
-    if (authHeader) {
-      if (!useProxy) {
-        headers['Authorization'] = authHeader;
-      }
-      downloadUrl = useProxy ? getProxiedURL(url, authHeader, true, customHeaders) : url;
-    }
+    return { book: existing, downloaded: false };
   }
 
-  const parsed = parseMediaType(item.mimeType);
-  const rawPathname = new URL(url).pathname;
-  let pathname: string;
-  try {
-    pathname = decodeURIComponent(rawPathname);
-  } catch {
-    pathname = rawPathname;
-  }
-  const ext = getFileExtFromMimeType(parsed?.mediaType) || getFileExtFromPath(pathname);
-  // Use the last non-empty path segment as the base; falling back to the
-  // entry id avoids producing 200+ char filenames from deep URLs and keeps
-  // us comfortably under the ~255-byte filesystem limit.
-  const basename = uniqueId();
-  const filename = ext ? `${basename}.${ext}` : basename;
-  let dstFilePath = await appService.resolveFilePath(filename, 'Cache');
-
-  console.log(`[OPDS] downloading "${item.title}" from ${url}`);
-  const responseHeaders = await downloadFile({
+  useOPDSProgressStore
+    .getState()
+    .fileProgress(catalog.id, item.entryId, item.title, { progress: 0, total: 0 });
+  const { filePath: dstFilePath, fingerprint } = await downloadAcquisitionFile(
     appService,
-    dst: dstFilePath,
-    cfp: '',
-    url: downloadUrl,
-    headers,
-    singleThreaded: true,
-    // Same self-signed/private-CA workaround as the manual download path
-    // (#2871): the native downloader's rustls validation ignores the OS
-    // trust store, so without this flag auto-download fails the TLS
-    // handshake on servers where feed browsing and manual download work
-    // (#4988).
-    skipSslVerification: true,
-  });
-
-  const probedFilename = await probeFilename(responseHeaders);
-  if (probedFilename) {
-    const newFilePath = await appService.resolveFilePath(probedFilename, 'Cache');
-    await appService.copyFile(dstFilePath, 'None', newFilePath, 'None');
-    await appService.deleteFile(dstFilePath, 'None');
-    dstFilePath = newFilePath;
-  }
+    catalog,
+    item,
+    (progress) =>
+      useOPDSProgressStore.getState().fileProgress(catalog.id, item.entryId, item.title, progress),
+  );
 
   const book = await appService.importBook(dstFilePath, books);
   if (!book) throw new Error(`importBook returned null for ${item.title}`);
@@ -147,9 +93,9 @@ async function downloadAndImport(
         appService,
         book,
         coverUrl: resolveURL(item.coverHref, item.baseURL),
-        username,
-        password,
-        customHeaders,
+        username: catalog.username ?? '',
+        password: catalog.password ?? '',
+        customHeaders: catalog.customHeaders,
       });
     } catch (error) {
       console.warn(`[OPDS] failed to apply the feed cover for "${item.title}":`, error);
@@ -160,12 +106,13 @@ async function downloadAndImport(
       catalogId: catalog.contentId || catalog.id,
       sourceUrl: url,
       bookHash: book.hash,
+      fingerprint,
     });
   } catch (error) {
     console.error('OPDS sync: failed to update source map:', error);
   }
   console.log(`[OPDS] imported "${item.title}"`);
-  return book;
+  return { book, downloaded: true };
 }
 
 /** Materialize a streaming audiobook stub (no file download). */
@@ -262,6 +209,9 @@ async function syncCatalog(
     ...ebookFailedEntries.filter((fe) => !isRetryEligible(fe)),
   ];
   const priorAttempts = new Map(ebookFailedEntries.map((fe) => [fe.entryId, fe.attempts]));
+  useOPDSProgressStore
+    .getState()
+    .patch(catalog.id, { phase: 'processing', total: allItems.length });
 
   if (allItems.length === 0 && pendingAudio.length === 0) {
     state.failedEntries = updatedFailedEntries;
@@ -311,8 +261,24 @@ async function syncCatalog(
     // bounds that loss to one batch and lets successive runs make progress.
     for (let offset = 0; offset < allItems.length; offset += PERSIST_BATCH_SIZE) {
       const batch = allItems.slice(offset, offset + PERSIST_BATCH_SIZE);
-      const downloadResults = await runWithConcurrency(batch, DOWNLOAD_CONCURRENCY, (item) =>
-        downloadAndImport(item, catalog, appService, books),
+      const downloadResults = await runWithConcurrency(
+        batch,
+        DOWNLOAD_CONCURRENCY,
+        async (item) => {
+          const progress = useOPDSProgressStore.getState();
+          try {
+            const imported = await downloadAndImport(item, catalog, appService, books);
+            if (imported.downloaded) progress.completeFile(catalog.id, item.entryId, false);
+            else {
+              const total = useOPDSProgressStore.getState().catalogs[catalog.id]?.total ?? 0;
+              progress.patch(catalog.id, { total: Math.max(0, total - 1) });
+            }
+            return imported.book;
+          } catch (error) {
+            progress.completeFile(catalog.id, item.entryId, true);
+            throw error;
+          }
+        },
       );
 
       const batchBooks: Book[] = [];
@@ -391,6 +357,7 @@ export async function syncSubscribedCatalogs(
   const errors: SyncResult['errors'] = [];
 
   for (const catalog of eligible) {
+    if (!useOPDSProgressStore.getState().begin(catalog.id, 'auto-download')) continue;
     try {
       const { newBooks, error } = await syncCatalog(
         catalog,
@@ -417,6 +384,8 @@ export async function syncSubscribedCatalogs(
       } catch {
         // Best effort
       }
+    } finally {
+      useOPDSProgressStore.getState().finish(catalog.id);
     }
   }
 

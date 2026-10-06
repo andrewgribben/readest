@@ -4,7 +4,6 @@ import type { OPDSBookMetadata } from './metadata';
 
 // --- Constants ---
 
-export const MAX_PAGES_PER_FEED = 5;
 // Directory-style catalogs (e.g. copyparty file listings) expose subfolders
 // as rel="subsection" navigation entries. When a catalog has no "by newest"
 // feed those subsections are crawled breadth-first, bounded by these caps.
