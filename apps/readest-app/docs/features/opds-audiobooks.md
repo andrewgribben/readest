@@ -24,6 +24,12 @@ Phone testing confirmed OPDS stubs and explicit downloads, ebook sync, paired-to
 
 ## Limits, dependencies and rollback
 
+### Chapter sleep timer correction
+
+Paired recordings keep their audio clock running between narrated chunks to avoid playback gaps. A chapter sleep stop now explicitly stops that clock before queuing the next ebook section. Standalone playback checks the outgoing chapter before loading the next audio file, and checks chapter boundaries before publishing periodic progress marks. This prevents a file transition or progress tick from losing the boundary. Files that continue the same chapter still play normally, and manual skips retain their existing behaviour.
+
+Regression tests cover paired clock shutdown, standalone file-boundary stops, progress-tick ordering and continued playback across files within one chapter. Manual verification should seek close to a chapter end, enable **End of chapter**, confirm audible playback stops, and press Play to confirm it resumes. This correction does not add sleep-timer handling to Android Auto's independent native playback path.
+
 PR #3 adds catalog updates and download progress; PR #10 adds Android Auto behaviour. Both stack on this PR. Reading ahead does not yet save an estimated audio timestamp in the background, and standalone listening does not yet offer an audio-derived ebook position alongside ebook sync choices. Those are separate future changes. Ordinary ebook sync behaviour remains responsible for ebook progress.
 
 The consolidated implementation is one commit above fork main, followed by a documentation commit. Revert that implementation commit to remove the feature as a whole, after handling dependent PRs. Do not undo individual historical fix commits from the archived branches. The technical startup-selection rules remain in read-along-narration.md and their boundary tests.
