@@ -221,6 +221,25 @@ const makePairedView = () => {
   } as unknown as FoliateView;
 };
 
+test('paired chapter sleep stops the continuous recording before queuing the next section', async () => {
+  const view = makeSubChapterView();
+  const controller = new TTSController({} as AppService, view);
+  controller.pairedAudiobook = SUB_CHAPTER_AUDIOBOOK;
+  await controller.init();
+  await controller.initViewTTS(1);
+  const stop = vi.spyOn(controller.ttsClient, 'stop');
+  vi.spyOn(view.tts!, 'next').mockReturnValue(undefined);
+  controller.state = 'playing';
+  controller.stopAtChapterEnd = true;
+
+  await controller.forward(false, true);
+
+  expect(stop).toHaveBeenCalledWith(false);
+  expect(controller.state).toBe('forward-paused');
+  expect(controller.getSectionIndex()).toBe(2);
+  await controller.shutdown();
+});
+
 beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
