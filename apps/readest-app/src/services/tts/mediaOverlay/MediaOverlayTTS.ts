@@ -185,6 +185,16 @@ export class MediaOverlayTTS {
     return position;
   }
 
+  getStartAudioPosition(): { audioHref: string; seconds: number } | null {
+    const par = this.#lastMark ? this.#section.parByMark(this.#lastMark) : this.#section.pars[0];
+    return par
+      ? {
+          audioHref: par.audioHref,
+          seconds: par.clipBegin + (par.clipEnd - par.clipBegin) * this.#playbackProgress,
+        }
+      : null;
+  }
+
   // Resume at the par a location falls inside: the first one still running at
   // the target, so seeking into the middle of a narrated unit replays that unit
   // rather than skipping to the next.

@@ -35,6 +35,8 @@ import {
   TTS_STOP_AT_CHAPTER_END,
 } from '@/services/tts/TTSSessionManager';
 import { getAnnotationOverlayColor } from '../utils/annotatorUtil';
+import { needsAudioPositionChoice } from '@/services/audiobook/startPosition';
+import { useAudioPositionChoiceStore } from '@/store/audioPositionChoiceStore';
 
 interface UseTTSControlProps {
   bookKey: string;
@@ -1019,7 +1021,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
         // ended the utterance immediately and killed the session.
         const speakSelection = oneTime && !!ttsSpeakRange;
         const narrateSelection = speakSelection && ttsController.narrationActive;
-        const ssml =
+        let ssml =
           speakSelection && !narrateSelection
             ? genSSMLRaw(ttsSpeakRange!.toString().trim())
             : narrateSelection
@@ -1027,6 +1029,27 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
               : ttsFromRange
                 ? ttsController.startFromRange(ttsFromRange)
                 : view.tts?.start();
+        const candidates =
+          !speakSelection && bookData.config?.audiobook
+            ? await ttsController.getPairedStartCandidates()
+            : null;
+        if (candidates?.listening !== null && candidates?.listening !== undefined) {
+          const selection = needsAudioPositionChoice(candidates.listening, candidates.reading)
+            ? await useAudioPositionChoiceStore.getState().request({
+                bookHash: bookData.book.hash,
+                listening: candidates.listening,
+                reading: candidates.reading,
+              })
+            : 'listening';
+          if (!selection) {
+            await ttsSessionManager.stopActive('user');
+            setIsPlaying(false);
+            return;
+          }
+          if (selection === 'listening') {
+            ssml = await ttsController.preparePairedStartAt(candidates.listening);
+          }
+        }
         if (ssml) {
           const lang = parseSSMLLang(ssml, primaryLang) || 'en';
           setIsPlaying(true);

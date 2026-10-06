@@ -61,10 +61,10 @@ export interface AudiobookSource {
 
 export interface AudiobookProgressHooks {
   onPlay?: () => void;
-  onPause?: (positionSec: number) => void;
-  onTick?: (positionSec: number) => void; // ~ every 15s while playing
-  onSeek?: (positionSec: number) => void;
-  onEnd?: (positionSec: number) => void; // shutdown / natural end
+  onPause?: (positionSec: number, capturedAt?: number) => void;
+  onTick?: (positionSec: number, capturedAt?: number) => void; // ~ every 15s while playing
+  onSeek?: (positionSec: number, capturedAt?: number) => void;
+  onEnd?: (positionSec: number, capturedAt?: number) => void; // shutdown / natural end
 }
 
 export class AudiobookController extends EventTarget implements PlaybackSource {
@@ -101,6 +101,12 @@ export class AudiobookController extends EventTarget implements PlaybackSource {
     const lastIndex = this.#tracks.length - 1;
     if (this.#trackIndex >= lastIndex) {
       this.#finish('ended');
+      return;
+    }
+    // A file can end without a final timeupdate. Check the chapter before
+    // loading the next file, which would otherwise replace its position.
+    if (this.#shouldStopAtChapterEnd()) {
+      void this.pause();
       return;
     }
     const track = this.#tracks[this.#trackIndex + 1];
@@ -148,14 +154,21 @@ export class AudiobookController extends EventTarget implements PlaybackSource {
   };
 
   #onTimeUpdate = (): void => {
-    if (this.#terminated) return;
+    if (this.#terminated || this.#state !== 'playing') return;
+    if (this.#shouldStopAtChapterEnd()) {
+      void this.pause();
+      return;
+    }
     const chapter = this.#timeline.chapterAt(this.#position());
     if (chapter === this.#lastChapter) return;
     this.#emitMark();
-    if (this.stopAtChapterEnd) {
-      void this.pause();
-    }
   };
+
+  #shouldStopAtChapterEnd(): boolean {
+    return (
+      this.stopAtChapterEnd && !!this.#lastChapter && this.#position() >= this.#lastChapter.end
+    );
+  }
 
   constructor(source: AudiobookSource, clock: AudiobookClock, hooks?: AudiobookProgressHooks) {
     super();
@@ -374,6 +387,10 @@ export class AudiobookController extends EventTarget implements PlaybackSource {
   #startTicking(): void {
     if (this.#tickTimer) return;
     this.#tickTimer = setInterval(() => {
+      // Test the boundary before publishing the next chapter's mark. Otherwise
+      // a tick racing timeupdate can erase the chapter we were meant to stop at.
+      this.#onTimeUpdate();
+      if (this.#state !== 'playing') return;
       const pos = this.#position();
       this.#hooks?.onTick?.(pos);
       this.#emitMark();

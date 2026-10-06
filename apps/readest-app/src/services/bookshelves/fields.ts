@@ -163,7 +163,7 @@ export const BOOKSHELF_FIELDS: BookshelfField[] = [
       { value: 'unavailable', label: _('Unavailable') },
     ],
     read: (b) =>
-      b.downloadedAt || b.absDownloadedAt
+      b.downloadedAt || b.absDownloadedAt || b.opdsDownloadedAt
         ? 'local'
         : AUDIO_FORMATS.includes(b.format)
           ? 'streaming'
@@ -179,7 +179,7 @@ export const BOOKSHELF_FIELDS: BookshelfField[] = [
     id: 'downloaded',
     label: _('Downloaded'),
     kind: 'boolean',
-    read: (b) => !!(b.downloadedAt || b.absDownloadedAt),
+    read: (b) => !!(b.downloadedAt || b.absDownloadedAt || b.opdsDownloadedAt),
   },
   { id: 'uploaded', label: _('In Readest Cloud'), kind: 'boolean', read: (b) => !!b.uploadedAt },
   {

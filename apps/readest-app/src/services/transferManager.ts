@@ -7,7 +7,7 @@ import { isSyncCategoryEnabled } from '@/services/sync/syncCategories';
 import { TranslationFunc } from '@/hooks/useTranslation';
 import { createProgressThrottle, ProgressHandler, ProgressPayload } from '@/utils/transfer';
 import { eventDispatcher } from '@/utils/event';
-import { isAbsOfflineCapable, isAudiobook } from '@/utils/audiobook';
+import { isAbsOfflineCapable, isAudiobook, isOpdsOfflineCapable } from '@/utils/audiobook';
 import { getTransferMessages } from './transferMessages';
 
 const TRANSFER_QUEUE_KEY = 'readest_transfer_queue';
@@ -217,6 +217,30 @@ class TransferManager {
       return null;
     }
     if (!isAbsOfflineCapable(book)) return null;
+
+    const store = useTransferStore.getState();
+    const existing = store.getTransferByBookHash(book.hash, 'download');
+    if (existing) {
+      return existing.id;
+    }
+
+    const transferId = store.addTransfer(book.hash, book.title, 'download', priority);
+    this.persistQueue();
+    this.processQueue();
+    return transferId;
+  }
+
+  /**
+   * Queue an offline download of an OPDS / BookOrbit audiobook. Same transfer
+   * row shape as {@link queueAbsOfflineDownload}; executeBookTransfer routes
+   * by format to the OPDS downloader.
+   */
+  queueOpdsOfflineDownload(book: Book, priority: number = 10): string | null {
+    if (!this.isReady()) {
+      console.warn('TransferManager not initialized');
+      return null;
+    }
+    if (!isOpdsOfflineCapable(book)) return null;
 
     const store = useTransferStore.getState();
     const existing = store.getTransferByBookHash(book.hash, 'download');
@@ -614,6 +638,18 @@ class TransferManager {
       await downloadAbsForOffline(this.appService!, book, progressHandler, abortController.signal);
       if (abortController.signal.aborted) return;
       book.absDownloadedAt = Date.now();
+      await this.updateBook!(book);
+      return;
+    }
+
+    if (
+      (book.format === 'OPDSAUDIO' || book.format === 'BOOKORBIT') &&
+      transfer.type === 'download'
+    ) {
+      const { downloadOpdsForOffline } = await import('@/services/opds/offline');
+      await downloadOpdsForOffline(this.appService!, book, progressHandler, abortController.signal);
+      if (abortController.signal.aborted) return;
+      book.opdsDownloadedAt = Date.now();
       await this.updateBook!(book);
       return;
     }
