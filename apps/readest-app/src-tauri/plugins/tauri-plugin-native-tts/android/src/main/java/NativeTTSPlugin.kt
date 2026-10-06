@@ -709,6 +709,10 @@ class NativeTTSPlugin(private val activity: Activity) : Plugin(activity) {
                 put("index", playoutCurrentIndex)
                 put("positionMs", player?.currentPosition ?: 0L)
                 put("playing", player?.isPlaying ?: false)
+                MediaPlaybackService.recordedPlaybackPosition()?.let { (hash, position) ->
+                    put("recordedBookHash", hash)
+                    put("recordedPositionMs", position)
+                }
             })
         }
     }
@@ -732,7 +736,8 @@ class NativeTTSPlugin(private val activity: Activity) : Plugin(activity) {
             Uri.fromFile(file)
         }
         val player = ensurePlayoutPlayer()
-        val startMs = positionMs.coerceAtLeast(0.0).toLong()
+        val startMs = MediaPlaybackService.takeRecordedPlayback(path)
+            ?: positionMs.coerceAtLeast(0.0).toLong()
 
         if (playoutLoadedPath == path && player.currentMediaItem != null) {
             player.seekTo(startMs)

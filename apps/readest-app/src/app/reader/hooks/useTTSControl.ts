@@ -1034,13 +1034,14 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
             ? await ttsController.getPairedStartCandidates()
             : null;
         if (candidates?.listening !== null && candidates?.listening !== undefined) {
-          const selection = needsAudioPositionChoice(candidates.listening, candidates.reading)
-            ? await useAudioPositionChoiceStore.getState().request({
-                bookHash: bookData.book.hash,
-                listening: candidates.listening,
-                reading: candidates.reading,
-              })
-            : 'listening';
+          const selection =
+            !candidates.live && needsAudioPositionChoice(candidates.listening, candidates.reading)
+              ? await useAudioPositionChoiceStore.getState().request({
+                  bookHash: bookData.book.hash,
+                  listening: candidates.listening,
+                  reading: candidates.reading,
+                })
+              : 'listening';
           if (!selection) {
             await ttsSessionManager.stopActive('user');
             setIsPlaying(false);

@@ -106,7 +106,18 @@ export const openAudiobookSession = async (input: {
   book: Book;
   episodeId?: string;
 }): Promise<{ bookKey: string; controller: AudiobookController } | null> => {
-  const { appService, book } = input;
+  const { appService } = input;
+  let { book } = input;
+  const journal = await (
+    await import('@/services/audiobook/carPlayback')
+  ).importCarListeningCheckpoint(appService, book);
+  if (journal && journal.updatedAt > book.updatedAt) {
+    book = {
+      ...book,
+      progress: [journal.position, journal.duration],
+      updatedAt: journal.updatedAt,
+    };
+  }
   const episodeId = input.episodeId || undefined;
 
   if (book.absMediaType === 'podcast' && !episodeId) {
