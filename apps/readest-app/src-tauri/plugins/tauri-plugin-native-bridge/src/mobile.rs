@@ -317,6 +317,20 @@ impl<R: Runtime> NativeBridge<R> {
 }
 
 impl<R: Runtime> NativeBridge<R> {
+    pub fn get_lookup_apps(&self) -> crate::Result<GetLookupAppsResponse> {
+        self.0
+            .run_mobile_plugin("get_lookup_apps", ())
+            .map_err(Into::into)
+    }
+
+    pub fn set_lookup_app(&self, payload: SetLookupAppRequest) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin("set_lookup_app", payload)
+            .map_err(Into::into)
+    }
+}
+
+impl<R: Runtime> NativeBridge<R> {
     pub fn select_directory(&self) -> crate::Result<SelectDirectoryResponse> {
         self.0
             .run_mobile_plugin("select_directory", ())
@@ -431,6 +445,24 @@ impl<R: Runtime> NativeBridge<R> {
     pub fn is_eink_refresh_supported(&self) -> crate::Result<EinkRefreshSupportedResponse> {
         self.0
             .run_mobile_plugin("is_eink_refresh_supported", ())
+            .map_err(Into::into)
+    }
+
+    pub fn query_pen_capabilities(&self) -> crate::Result<QueryPenCapabilitiesResponse> {
+        self.0
+            .run_mobile_plugin("query_pen_capabilities", ())
+            .map_err(Into::into)
+    }
+
+    pub fn start_raw_drawing(&self, payload: StartRawDrawingRequest) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin("start_raw_drawing", payload)
+            .map_err(Into::into)
+    }
+
+    pub fn stop_raw_drawing(&self) -> crate::Result<()> {
+        self.0
+            .run_mobile_plugin("stop_raw_drawing", ())
             .map_err(Into::into)
     }
 }
@@ -568,10 +600,17 @@ impl<R: Runtime> NativeBridge<R> {
             .map_err(|e| crate::Error::NativeBridgeError(format!("invalid base64 PNG: {e}")))
     }
 
+    pub fn paper_curl(&self, payload: serde_json::Value) -> crate::Result<serde_json::Value> {
+        self.0
+            .run_mobile_plugin("paper_curl", payload)
+            .map_err(Into::into)
+    }
+
     /// Native cover for the two-column page curl (#6106); see the Swift
     /// side. Android has no implementation yet and rejects.
     pub fn cover_webview_region(
         &self,
+        _window: &tauri::WebviewWindow<R>,
         payload: CaptureWebviewRegionRequest,
     ) -> crate::Result<CoverWebviewRegionResponse> {
         self.0
@@ -581,6 +620,7 @@ impl<R: Runtime> NativeBridge<R> {
 
     pub fn uncover_webview_region(
         &self,
+        _window: &tauri::WebviewWindow<R>,
         payload: UncoverWebviewRegionRequest,
     ) -> crate::Result<()> {
         self.0

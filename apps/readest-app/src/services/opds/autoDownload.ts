@@ -2,6 +2,7 @@ import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
 import type { OPDSCatalog } from '@/types/opds';
 import { resolveURL } from '@/app/opds/utils/opdsUtils';
+import { allowsSelfSignedCertAt } from '@/utils/tls';
 import type { BookOrbitSettings } from '@/types/settings';
 import { ensureOpdsAudiobookStub } from './audiobookStub';
 import { applyOPDSCover } from './cover';
@@ -89,13 +90,15 @@ async function downloadAndImport(
   // Best effort: a failure here must not fail an otherwise good import.
   if (item.coverHref) {
     try {
+      const coverUrl = resolveURL(item.coverHref, item.baseURL);
       await applyOPDSCover({
         appService,
         book,
-        coverUrl: resolveURL(item.coverHref, item.baseURL),
+        coverUrl,
         username: catalog.username ?? '',
         password: catalog.password ?? '',
         customHeaders: catalog.customHeaders,
+        allowSelfSignedCert: allowsSelfSignedCertAt(catalog, coverUrl),
       });
     } catch (error) {
       console.warn(`[OPDS] failed to apply the feed cover for "${item.title}":`, error);
@@ -136,6 +139,7 @@ async function stubAudiobook(
     tracks,
     coverUrl: item.coverHref ? resolveURL(item.coverHref, item.baseURL) : undefined,
     catalog,
+    certOwner: catalog,
     bookorbit,
   });
   if (created) {

@@ -55,6 +55,7 @@ describe('opdsNarrationTracks', () => {
       customHeaders: {},
       hasCredentials: false,
       origin: 'https://opds.example',
+      allowSelfSignedCert: false,
     });
   });
 
@@ -76,6 +77,7 @@ describe('opdsNarrationTracks', () => {
       customHeaders: {},
       hasCredentials: true,
       origin: 'https://opds.example',
+      allowSelfSignedCert: false,
     });
 
     await expect(opdsNarrationTracks(source)).resolves.toEqual([
@@ -92,6 +94,7 @@ describe('loadOpdsTrack', () => {
       customHeaders: {},
       hasCredentials: true,
       origin: 'https://opds.example',
+      allowSelfSignedCert: false,
     });
     vi.mocked(audioStream.fetchOpdsAudioBlob).mockResolvedValue(new Blob(['audio']));
   });

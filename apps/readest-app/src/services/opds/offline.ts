@@ -49,6 +49,8 @@ interface OfflineFile {
   headers?: Record<string, string>;
   title?: string;
   mimeType: string;
+  /** Per-catalog/server self-signed-cert opt-in (see `allowsSelfSignedCert`). */
+  allowSelfSignedCert: boolean;
   /** Global timeline fields filled after download for OPDS; known for BookOrbit. */
   startOffset: number;
   duration: number;
@@ -106,6 +108,7 @@ const planOpdsFiles = async (data: OpdsAudiobookData, bookHash: string): Promise
       ...(Object.keys(headers).length ? { headers } : {}),
       ...(link.title ? { title: link.title } : {}),
       mimeType: link.mimeType,
+      allowSelfSignedCert: auth.allowSelfSignedCert,
       startOffset: track.startOffset,
       duration: track.duration,
       index: track.index,
@@ -137,7 +140,7 @@ const downloadFiles = async (
           cfp: '',
           url: file.url,
           headers,
-          skipSslVerification: true,
+          skipSslVerification: file.allowSelfSignedCert,
           onProgress: (p) =>
             onProgress?.({
               progress: doneBytes + p.progress,
@@ -190,6 +193,7 @@ export const downloadOpdsForOffline = async (
           ...normalizeCustomHeaders(client.server.customHeaders),
         },
         mimeType: track.mimeType,
+        allowSelfSignedCert: client.allowSelfSignedCert,
         startOffset: track.startOffset,
         duration: track.duration,
         index: track.index,
