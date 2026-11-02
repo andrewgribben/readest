@@ -377,6 +377,12 @@ const colorPanelItems = [
     section: 'Theme',
   },
   {
+    id: 'settings.color.transparentImageBackground',
+    labelKey: _('Make White Image Backgrounds Transparent'),
+    keywords: ['image', 'white', 'background', 'transparent', 'diagram'],
+    section: 'Theme',
+  },
+  {
     id: 'settings.color.overrideBookColor',
     labelKey: _('Override Book Color'),
     keywords: ['override', 'book', 'color', 'custom'],
@@ -410,6 +416,12 @@ const colorPanelItems = [
     id: 'settings.tts.mediaMetadata',
     labelKey: _('TTS Media Info Update Frequency'),
     keywords: ['tts', 'media', 'metadata', 'bluetooth', 'notification', 'chapter', 'paragraph'],
+    section: 'TTS',
+  },
+  {
+    id: 'settings.tts.customServices',
+    labelKey: _('Custom TTS Services'),
+    keywords: ['tts', 'custom', 'voice', 'api key', 'openai', 'kokoro', 'speech', 'byok'],
     section: 'TTS',
   },
   {
@@ -483,9 +495,30 @@ const controlPanelItems = [
     section: 'Pagination',
   },
   {
+    id: 'settings.control.imageViewerGesture',
+    labelKey: _('Open Images'),
+    keywords: ['image', 'viewer', 'gallery', 'tap', 'click', 'long', 'press', 'hold'],
+    section: 'Pagination',
+  },
+  {
     id: 'settings.control.showPaginationButtons',
     labelKey: _('Show Page Navigation Buttons'),
     keywords: ['show', 'pagination', 'buttons', 'navigation', 'arrows', 'chevron', 'page', 'turn'],
+    section: 'Pagination',
+  },
+  {
+    id: 'settings.control.stablePageNumbers',
+    labelKey: _('Stable Page Numbers'),
+    keywords: [
+      'stable',
+      'page',
+      'number',
+      'count',
+      'screen',
+      'calibrate',
+      'measured',
+      'pagination',
+    ],
     section: 'Pagination',
   },
   {

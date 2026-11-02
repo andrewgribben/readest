@@ -13,6 +13,7 @@ import type { Book } from '@/types/book';
 import type { OPDSCatalog } from '@/types/opds';
 import type { BookOrbitSettings } from '@/types/settings';
 import type { AppService } from '@/types/system';
+import { allowsSelfSignedCertAt, type SelfSignedCertOption } from '@/utils/tls';
 import { applyOPDSCover } from './cover';
 import { makeOpdsAudioFilePath, opdsAudioIdentity, type OpdsAudioTrackLink } from './audiobook';
 
@@ -26,6 +27,8 @@ export interface EnsureOpdsAudiobookStubInput {
   tracks: OpdsAudioTrackLink[];
   coverUrl?: string;
   catalog: Pick<OPDSCatalog, 'username' | 'password' | 'customHeaders'>;
+  /** Self-signed cert opt-in owner for the cover fetch, e.g. the catalog. */
+  certOwner?: SelfSignedCertOption & { url?: string };
   bookorbit?: Pick<BookOrbitSettings, 'serverUrl' | 'password'>;
 }
 
@@ -78,6 +81,7 @@ export const ensureOpdsAudiobookStub = async (
         username: catalog.username ?? '',
         password: catalog.password ?? '',
         customHeaders: catalog.customHeaders,
+        allowSelfSignedCert: allowsSelfSignedCertAt(input.certOwner ?? {}, coverUrl),
       });
     } catch (error) {
       console.warn(`[OPDS] failed to apply the feed cover for "${title}":`, error);
