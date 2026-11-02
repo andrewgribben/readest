@@ -63,6 +63,8 @@ vi.mock('@/app/reader/utils/footnoteHeuristics', () => ({
 }));
 vi.mock('@/app/reader/utils/annotatorUtil', () => ({ drawAnnotationOverlay: () => {} }));
 vi.mock('@/utils/style', () => ({
+  applyLinkHitArea: () => {},
+  keepTextAlignment: () => {},
   getBaseFontFamily: () => h.fontFamily,
   getBaseFontSize: () => 16,
   getStyles: () => '',
@@ -243,9 +245,11 @@ describe('footnote popup box (#5999)', () => {
 
     const popup = popupContainer();
     expect(popup.getAttribute('aria-hidden')).toBe('false');
-    expect(popup.scrollHeight).toBeGreaterThan(popup.clientHeight);
-    expect(popup.scrollWidth).toBeLessThanOrEqual(popup.clientWidth);
-    expect(getComputedStyle(popup).overflowX).toBe('hidden');
+    const content = popup.querySelector<HTMLElement>('.footnote-content')!;
+    expect(content.scrollHeight).toBeGreaterThan(content.clientHeight);
+    expect(content.scrollWidth).toBeLessThanOrEqual(content.clientWidth);
+    expect(getComputedStyle(content).overflowX).toBe('hidden');
+    expect(popup.scrollHeight).toBeLessThanOrEqual(popup.clientHeight);
   });
 });
 

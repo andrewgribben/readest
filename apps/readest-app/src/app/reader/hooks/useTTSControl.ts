@@ -4,6 +4,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useThemeStore } from '@/store/themeStore';
 import { useBookDataStore } from '@/store/bookDataStore';
 import { useReaderStore } from '@/store/readerStore';
+import { getEnabledCustomTTSServices } from '@/store/customTTSStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useBookProgress } from '@/store/readerProgressStore';
 import { useProofreadStore } from '@/store/proofreadStore';
@@ -24,10 +25,12 @@ import { genSSMLRaw, parseSSMLLang } from '@/utils/ssml';
 import { throttle } from '@/utils/throttle';
 import { isCfiInLocation } from '@/utils/cfi';
 import { getLocale } from '@/utils/misc';
+import { getPDFSpeechLang } from '@/utils/lang';
 import { estimateTTSTime } from '@/utils/ttsTime';
 import { pageBreakFraction } from '@/utils/ttsPageFollow';
 import { getTextSubRange, rangeTextExcludingInert } from '@/services/tts/wordHighlight';
 import { releaseUnblockAudio, ttsMediaBridge, unblockAudio } from '@/services/tts/ttsMediaBridge';
+import { ttsDownloadManager } from '@/services/tts/ttsDownloadManager';
 import {
   asTTSController,
   getBookHashFromKey,
@@ -51,6 +54,22 @@ const PAGE_FOLLOW_INTERVAL_MS = 200;
 // Cadence of the buffering probe. Fast enough that a spinner appears with the
 // stall rather than after it, slow enough to cost nothing over a long session.
 const TTS_BUFFERING_POLL_MS = 400;
+
+// Following the voice turns the page and focuses the spoken text inside the
+// book's iframe, which takes the caret (and an IME composition) out of a note
+// being typed and closes its popup (#6837). The view holds still while a note
+// editor has focus; the next mark catches up once it loses focus.
+const isTypingNote = () => !!document.activeElement?.hasAttribute('data-note-editor');
+
+// Text the book hides is still read aloud: a display:none long description
+// next to a figure, or screen-reader text off the left edge. It has no box on
+// the page, and foliate settles a box-less anchor on the section start (#7153),
+// so the view holds still until the voice reaches text that is shown. Same
+// test as the rect foliate's scrollToAnchor picks.
+const isRendered = (range: Range) =>
+  Array.from(range.getClientRects()).some(
+    (r) => r.width > 0 && r.height > 0 && r.x >= 0 && r.y >= 0,
+  );
 
 export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProps) => {
   const _ = useTranslation();
@@ -86,6 +105,10 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
   const previousSectionLabelRef = useRef<string | undefined>(undefined);
   const ttsControllerRef = useRef<TTSController | null>(null);
   const isStartingTTSRef = useRef(false);
+  // Each start takes a generation; stopping moves it on, so a start still
+  // initializing when the user turns read aloud off is cancelled (and never
+  // blocks the next start).
+  const startGenerationRef = useRef(0);
   // Last broadcast playback state, so a follower engaging mid-session can be
   // replayed the current state on demand (see handleTTSSyncRequest).
   const playbackStateRef = useRef<'playing' | 'paused' | 'stopped'>('stopped');
@@ -302,7 +325,10 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
     const tryAdopt = async (): Promise<boolean> => {
       if (cancelled || isStartingTTSRef.current) return false;
       const view = getView(bookKey);
-      if (!view) return false;
+      // A remount under the same key (back from another route) still holds the
+      // previous, detached view until the new one opens: highlights drawn
+      // there never show.
+      if (!view?.isConnected) return false;
       isStartingTTSRef.current = true;
       try {
         const controller = sessionController;
@@ -383,6 +409,13 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
         timeout: 5000,
       });
     };
+    const handleQuotaExceeded = () => {
+      eventDispatcher.dispatch('toast', {
+        message: _('Daily TTS limit reached. Upgrade your plan or try again tomorrow.'),
+        type: 'error',
+        timeout: 5000,
+      });
+    };
 
     const stopPageFollow = () => {
       if (pageFollowTimerRef.current === null) return;
@@ -441,6 +474,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
         }
         const contents = currentView.renderer.getContents();
         if (contents.some(({ doc }) => (doc.getSelection()?.toString().length ?? 0) > 0)) return;
+        if (isTypingNote()) return;
 
         const progress = controller.getSentenceProgress();
         if (progress === null) {
@@ -477,6 +511,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
       if (!preview) {
         viewSettings.ttsLocation = cfi;
         setViewSettings(bookKey, viewSettings);
+        if (isTypingNote()) return;
       }
 
       const hlContents = view.renderer.getContents();
@@ -524,7 +559,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
       // The cfi may not resolve to a range in this doc (stale/cross-realm doc,
       // detached node). A null range would crash scrollToAnchor (foliate reads
       // range.startContainer) or getBoundingClientRect below (READEST-21).
-      if (!range) return;
+      if (!range || !isRendered(range)) return;
       if (!view.renderer.scrolled) {
         view.renderer.scrollToAnchor?.(range);
         // Page-follow measures where the page cuts the whole sounding sentence.
@@ -564,7 +599,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
     const handleHighlightWord = (e: Event) => {
       const { cfi } = (e as CustomEvent<{ cfi: string }>).detail;
       const view = getView(bookKey);
-      if (!cfi || !view || !followingTTSLocationRef.current) return;
+      if (!cfi || !view || !followingTTSLocationRef.current || isTypingNote()) return;
 
       const hlContents = view.renderer.getContents();
       const hlPrimaryIdx = view.renderer.primaryIndex;
@@ -582,7 +617,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
 
       const wordRange = anchor(doc);
       const visibleRange = getProgress(bookKey)?.range as Range | undefined;
-      if (!wordRange || !visibleRange) return;
+      if (!wordRange || !visibleRange || !isRendered(wordRange)) return;
 
       try {
         const ahead = wordRange.compareBoundaryPoints(Range.END_TO_START, visibleRange) > 0;
@@ -633,6 +668,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
     };
 
     ttsController.addEventListener('tts-need-auth', handleNeedAuth);
+    ttsController.addEventListener('tts-quota-exceeded', handleQuotaExceeded);
     ttsController.addEventListener('tts-highlight-mark', handleHighlightMark);
     ttsController.addEventListener('tts-highlight-word', handleHighlightWord);
     ttsController.addEventListener('tts-position', handlePosition);
@@ -644,6 +680,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
     return () => {
       stopPageFollow();
       ttsController.removeEventListener('tts-need-auth', handleNeedAuth);
+      ttsController.removeEventListener('tts-quota-exceeded', handleQuotaExceeded);
       ttsController.removeEventListener('tts-highlight-mark', handleHighlightMark);
       ttsController.removeEventListener('tts-highlight-word', handleHighlightWord);
       ttsController.removeEventListener('tts-position', handlePosition);
@@ -787,7 +824,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
   // Section change callback
   const handleSectionChange = useCallback(
     async (sectionIndex: number) => {
-      if (!followingTTSLocationRef.current) return;
+      if (!followingTTSLocationRef.current || isTypingNote()) return;
       const view = getView(bookKey);
       const sections = view?.book.sections;
       if (!sections || sectionIndex < 0 || sectionIndex >= sections.length) return;
@@ -815,6 +852,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
   useEffect(() => {
     const ttsHighlightOptions = viewSettings?.ttsHighlightOptions;
     if (ttsControllerRef.current && ttsHighlightOptions) {
+      ttsControllerRef.current.sentenceTint = !viewSettings!.isEink;
       ttsControllerRef.current.updateHighlightOptions(
         getTTSHighlightOptions(
           ttsHighlightOptions,
@@ -862,6 +900,9 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
       // must never block or skip these resets if it hangs or throws, which was
       // observed with iOS system TTS (Edge TTS was unaffected). See #4676.
       ttsControllerRef.current = null;
+      // Cancels a start still initializing, and lets the next one through.
+      startGenerationRef.current++;
+      isStartingTTSRef.current = false;
       setTtsController(null);
       setIsPlaying(false);
       emitPlaybackState('stopped');
@@ -895,6 +936,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
     // end up creating two TTSController instances that speak simultaneously.
     if (isStartingTTSRef.current) return;
     isStartingTTSRef.current = true;
+    const generation = ++startGenerationRef.current;
 
     try {
       const view = getView(bookKey);
@@ -936,8 +978,6 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
         }
       }
 
-      const primaryLang = bookData.book.primaryLanguage;
-
       if (ttsControllerRef.current) {
         ttsControllerRef.current.stop();
         ttsControllerRef.current = null;
@@ -973,6 +1013,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
           handleSectionChange,
         );
         ttsController.setSkipInlineAnnotations(viewSettings.ttsSkipInlineAnnotations ?? false);
+        ttsController.setCustomTTSServices(getEnabledCustomTTSServices);
         // The constructor takes the view directly (attachView, which also binds
         // this, only runs on the background-session reattach path), so set the
         // book key here or the per-book audio cache never gets a hash to open.
@@ -1006,7 +1047,26 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
         // own narration or a synthesized voice.
         ttsController.useNarration = viewSettings.ttsUseNarration ?? true;
         await ttsController.init();
+        // Turned off while the engines initialized: never touch the view a
+        // newer session may own.
+        if (startGenerationRef.current !== generation) {
+          void ttsController.shutdown();
+          return;
+        }
         await ttsController.initViewTTS(ttsFromIndex);
+        if (startGenerationRef.current !== generation) {
+          void ttsController.shutdown();
+          return;
+        }
+        const speechSection = view.renderer.getContents().find((x) => x.index === ttsFromIndex);
+        const primaryLang =
+          bookData.book.format === 'PDF'
+            ? getPDFSpeechLang(
+                bookData.book.primaryLanguage,
+                speechSection?.doc.body?.textContent || '',
+              )
+            : bookData.book.primaryLanguage;
+        ttsController.sentenceTint = !viewSettings.isEink;
         ttsController.updateHighlightOptions(
           getTTSHighlightOptions(
             viewSettings.ttsHighlightOptions,
@@ -1073,16 +1133,21 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
         syncClientCapabilities();
         setTTSEnabled(bookKey, true);
       } catch (error) {
+        // A start the user cancelled must not touch the session after it.
+        if (startGenerationRef.current !== generation) return;
+        // The full player may already be open (it opens before init): close
+        // it with the mini player rather than leave dead controls up.
+        onRequestHidePanel?.();
         setShowIndicator(false);
         setIsPlaying(false);
         eventDispatcher.dispatch('toast', {
-          message: _('TTS not supported for this document'),
+          message: _('TTS not available for this page'),
           type: 'error',
         });
         console.error(error);
       }
     } finally {
-      isStartingTTSRef.current = false;
+      if (startGenerationRef.current === generation) isStartingTTSRef.current = false;
     }
   };
 
@@ -1321,6 +1386,9 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
           await ttsController.setVoice(voice, lang);
         }
         syncClientCapabilities();
+        // Audio is cached per voice: a running download of this book starts
+        // over with the new one instead of finishing the old voice's.
+        ttsDownloadManager.restartBook(getBookHashFromKey(bookKey));
       }
     }, 3000),
     [],

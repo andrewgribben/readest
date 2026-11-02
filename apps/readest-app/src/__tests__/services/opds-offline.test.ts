@@ -128,6 +128,31 @@ describe('downloadOpdsForOffline — OPDSAUDIO', () => {
     expect(manifest.tracks[0].contentUrl.startsWith(`${dir}/`)).toBe(true);
   });
 
+  it('skips TLS verification on the offline download only when the catalog opts in', async () => {
+    const { service } = makeService();
+    const book = {
+      hash: 'bookhash2',
+      format: 'OPDSAUDIO',
+      title: 'Sherlock',
+      author: 'Doyle',
+      filePath: makeOpdsAudioFilePath(opdsData()),
+      createdAt: 1,
+      updatedAt: 1,
+    } as Book;
+
+    resolveOpdsAudioAuthMock.mockResolvedValue({
+      authHeader: null,
+      customHeaders: {},
+      hasCredentials: false,
+      origin: 'https://opds.example',
+      allowSelfSignedCert: true,
+    });
+
+    await downloadOpdsForOffline(service, book);
+
+    expect(downloadFileMock.mock.calls[0]![0]).toMatchObject({ skipSslVerification: true });
+  });
+
   it('skips tracks that already exist on disk', async () => {
     const { service, files } = makeService();
     const data = opdsData();

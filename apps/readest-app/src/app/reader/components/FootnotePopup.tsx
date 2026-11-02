@@ -14,11 +14,13 @@ import { useCustomFontStore } from '@/store/customFontStore';
 import { useResponsiveSize } from '@/hooks/useResponsiveSize';
 import { useTranslation } from '@/hooks/useTranslation';
 import {
+  applyLinkHitArea,
   getBaseFontFamily,
   getBaseFontSize,
   getFootnoteStyles,
   getStyles,
   getThemeCode,
+  keepTextAlignment,
 } from '@/utils/style';
 import { getPopupPosition, getPosition, Position } from '@/utils/sel';
 import { getPopupBounds, offsetPosition, PopupBounds } from '@/utils/insets';
@@ -317,6 +319,7 @@ const FootnotePopup: React.FC<FootnotePopupProps> = ({
       popupView.addEventListener('load', (e: CustomEvent) => {
         const { doc, index } = e.detail as { doc: Document; index: number };
         const bookData = getBookData(bookKey)!;
+        keepTextAlignment(doc);
         mountAdditionalFonts(doc, isCJKLang(bookData.book?.primaryLanguage));
         getLoadedFonts().forEach((font) => {
           mountCustomFont(doc, font);
@@ -330,6 +333,10 @@ const FootnotePopup: React.FC<FootnotePopupProps> = ({
         // caret only clears a selection reported before. On touch devices the
         // caret a tap on a highlight drops lands after the click that opened
         // its toolbar, and used to close it again (#6395).
+        // A selection is settled — ready for the Annotator's quick action —
+        // once no pointer is down: on release, or for a touch selection, after
+        // the system long-press took over the gesture (#6804).
+        let pointerDown = false;
         const report = (tap: boolean) => {
           if (!doc.defaultView) return; // popup already torn down
           const sel = doc.getSelection();
@@ -350,6 +357,7 @@ const FootnotePopup: React.FC<FootnotePopupProps> = ({
             cfi: getPopupCfi?.(range),
             href: footnoteHrefRef.current?.split('#')[0],
             getPopupCfi,
+            quickAction: tap || !pointerDown,
           });
         };
         let selectionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -357,7 +365,20 @@ const FootnotePopup: React.FC<FootnotePopupProps> = ({
           if (selectionTimer) clearTimeout(selectionTimer);
           selectionTimer = setTimeout(() => report(false), 250);
         });
+        doc.addEventListener('pointerdown', (ev: PointerEvent) => {
+          pointerDown = true;
+          // A new gesture re-arms the Annotator's quick action, as a pointerdown
+          // in the book does; without it only the first popup selection ran it.
+          eventDispatcher.dispatch('footnote-pointerdown', {
+            key: bookKey,
+            pointerType: ev.pointerType,
+          });
+        });
+        doc.addEventListener('pointercancel', () => {
+          pointerDown = false;
+        });
         doc.addEventListener('pointerup', () => {
+          pointerDown = false;
           if (selectionTimer) clearTimeout(selectionTimer);
           report(true);
         });
@@ -430,7 +451,11 @@ const FootnotePopup: React.FC<FootnotePopupProps> = ({
       const viewSettings = getViewSettings(bookKey)!;
       renderer.setAttribute('flow', 'scrolled');
       renderer.setAttribute('no-preload', '');
-      renderer.setAttribute('no-background', '');
+      // Foliate moves authored body backgrounds onto its view surface. Let it
+      // paint those above the texture instead of discarding them with the fill.
+      if (!viewSettings.backgroundTextureId || viewSettings.backgroundTextureId === 'none') {
+        renderer.setAttribute('no-background', '');
+      }
       renderer.setAttribute('margin-top', '0px');
       renderer.setAttribute('margin-right', '0px');
       renderer.setAttribute('margin-bottom', '0px');
@@ -443,7 +468,7 @@ const FootnotePopup: React.FC<FootnotePopupProps> = ({
         const backgroundColor = getComputedStyle(popupContainer).backgroundColor;
         popupTheme.bg = backgroundColor;
       }
-      const mainStyles = getStyles(viewSettings, popupTheme, getLoadedFonts());
+      const mainStyles = getStyles(viewSettings, popupTheme, getLoadedFonts(), true);
       const footnoteStyles = getFootnoteStyles();
       renderer.setStyles?.(`${mainStyles}\n${footnoteStyles}`);
     };
@@ -452,6 +477,8 @@ const FootnotePopup: React.FC<FootnotePopupProps> = ({
       const detail = (e as CustomEvent).detail;
       // console.log('render footnote', detail);
       const { view, href, index, extract } = detail;
+      const popupDoc = (view as FoliateView).renderer.getContents?.()[0]?.doc;
+      if (popupDoc) applyLinkHitArea(popupDoc);
       footnoteHrefRef.current = href;
       setSourceHref(getJumpHref(href));
       resetPopupAnnotationState({ index: index ?? -1, extract: extract ?? null });
@@ -492,6 +519,18 @@ const FootnotePopup: React.FC<FootnotePopupProps> = ({
       containerRef.current?.focus();
     }
   }, [showPopup]);
+
+  // FoliateViewer lifts the iOS instant-highlight selection suppression while
+  // the popup is up, so its text can be selected.
+  useEffect(() => {
+    eventDispatcher.dispatch('footnote-popup-shown', { key: bookKey, shown: showPopup });
+  }, [bookKey, showPopup]);
+  useEffect(
+    () => () => {
+      eventDispatcher.dispatch('footnote-popup-shown', { key: bookKey, shown: false });
+    },
+    [bookKey],
+  );
 
   // A tap on a highlighted link opens the highlight's toolbar at the same word
   // as this popup; tell it which side is taken so the two don't stack (#6390).
@@ -639,6 +678,16 @@ const FootnotePopup: React.FC<FootnotePopupProps> = ({
     setShowPopup(false);
     setSourceHref(null);
   };
+
+  useEffect(() => {
+    if (!showPopup) return;
+    // Paragraph navigation moves the anchor out from under this popup.
+    const onParagraphFocus = (event: CustomEvent) => {
+      if (event.detail?.bookKey === bookKey) handleDismissPopup();
+    };
+    eventDispatcher.on('paragraph-focus', onParagraphFocus);
+    return () => eventDispatcher.off('paragraph-focus', onParagraphFocus);
+  }, [bookKey, showPopup, handleDismissPopup]);
 
   // Handle custom footnote popup event from iframe event
   const handleFootnotePopupEvent = (event: CustomEvent) => {
@@ -869,7 +918,8 @@ const FootnotePopup: React.FC<FootnotePopupProps> = ({
 
   return (
     <div ref={containerRef} role='toolbar' tabIndex={-1}>
-      {showPopup && <Overlay onDismiss={handleDismissPopup} />}
+      {/* Above Paragraph mode's z-40 backdrop, below the popup's z-[42] band. */}
+      {showPopup && <Overlay className='z-[41]' onDismiss={handleDismissPopup} />}
       {/* The note's text is selectable, so the selection toolbar and the range
           handles open against a selection that lives inside this popup — they
           have to draw over it, exactly as they do over the book page. That used
@@ -893,17 +943,8 @@ const FootnotePopup: React.FC<FootnotePopupProps> = ({
           height={responsiveHeight}
           position={showPopup ? popupPosition! : undefined}
           trianglePosition={showPopup ? anchor! : undefined}
-          // Scroll along the note's block axis and clip the other one. A note
-          // that wraps can never need a horizontal scrollbar, but leaving that
-          // axis `visible` promotes it to `auto` (CSS resolves `visible` to
-          // `auto` next to a non-`visible` value), so any stray pixel of
-          // cross-axis overflow bought a second scrollbar (#5999).
-          className={clsx(
-            'select-text pointer-events-auto',
-            viewSettings.vertical
-              ? 'overflow-x-auto overflow-y-hidden'
-              : 'overflow-y-auto overflow-x-hidden',
-          )}
+          // Keep the texture surface stationary while the note scrolls inside it.
+          className='footnote-popup select-text pointer-events-auto overflow-clip'
           onDismiss={handleDismissPopup}
         >
           {canGoBack && (
@@ -949,7 +990,16 @@ const FootnotePopup: React.FC<FootnotePopupProps> = ({
           )}
           {/* Fill the popup's content box rather than restating its border-box
               size, which overflowed it by the border on both axes (#5999). */}
-          <div className='footnote-content h-full w-full' ref={footnoteRef}></div>
+          <div
+            className={clsx(
+              'footnote-content h-full w-full',
+              // Clip the cross axis so it cannot gain a second scrollbar (#5999).
+              viewSettings.vertical
+                ? 'overflow-x-auto overflow-y-hidden'
+                : 'overflow-y-auto overflow-x-hidden',
+            )}
+            ref={footnoteRef}
+          ></div>
         </Popup>
       </div>
     </div>
