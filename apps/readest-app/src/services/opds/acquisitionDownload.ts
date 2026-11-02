@@ -12,6 +12,7 @@ import {
 } from '@/app/opds/utils/opdsReq';
 import { resolveURL, parseMediaType, getFileExtFromPath } from '@/app/opds/utils/opdsUtils';
 import { normalizeCustomHeaders } from '@/utils/customHeaders';
+import { allowsSelfSignedCertAt, tlsFetch } from '@/utils/tls';
 import { READEST_OPDS_USER_AGENT } from '@/services/constants';
 import type { AppService } from '@/types/system';
 import type { OPDSCatalog } from '@/types/opds';
@@ -34,13 +35,15 @@ const buildAuthDownload = async (
   downloadUrl: string;
   headers: Record<string, string>;
   useProxy: boolean;
+  allowSelfSignedCert: boolean;
 }> => {
   const username = catalog.username ?? '';
   const password = catalog.password ?? '';
   const customHeaders = normalizeCustomHeaders(catalog.customHeaders);
+  const allowSelfSignedCert = allowsSelfSignedCertAt(catalog, absoluteUrl);
   const useProxy = needsProxy(absoluteUrl);
 
-  let downloadUrl = useProxy ? getProxiedURL(absoluteUrl, '', true, customHeaders) : absoluteUrl;
+  const downloadUrl = useProxy ? getProxiedURL(absoluteUrl, true, customHeaders) : absoluteUrl;
   const headers: Record<string, string> = {
     'User-Agent': READEST_OPDS_USER_AGENT,
     Accept: '*/*',
@@ -48,18 +51,20 @@ const buildAuthDownload = async (
   };
 
   if (username || password) {
-    const authHeader = await probeAuth(absoluteUrl, username, password, useProxy, customHeaders);
+    const authHeader = await probeAuth(
+      absoluteUrl,
+      username,
+      password,
+      useProxy,
+      customHeaders,
+      allowSelfSignedCert,
+    );
     if (authHeader) {
-      if (!useProxy) {
-        headers['Authorization'] = authHeader;
-      }
-      downloadUrl = useProxy
-        ? getProxiedURL(absoluteUrl, authHeader, true, customHeaders)
-        : absoluteUrl;
+      headers['Authorization'] = authHeader;
     }
   }
 
-  return { downloadUrl, headers, useProxy };
+  return { downloadUrl, headers, useProxy, allowSelfSignedCert };
 };
 
 /** HEAD probe of the acquisition URL for change-detection fingerprints. */
@@ -70,13 +75,17 @@ export const probeAcquisitionFingerprint = async (
 ): Promise<OPDSSourceFingerprint | null> => {
   const absoluteUrl = resolveURL(acquisitionHref, baseURL);
   try {
-    const { downloadUrl, headers } = await buildAuthDownload(absoluteUrl, catalog);
+    const { downloadUrl, headers, allowSelfSignedCert } = await buildAuthDownload(
+      absoluteUrl,
+      catalog,
+    );
     const fetch = isTauriAppPlatform() ? tauriFetch : window.fetch;
-    const res = await fetch(downloadUrl, {
-      method: 'HEAD',
-      headers: withOriginSuppressed(headers),
-      danger: { acceptInvalidCerts: true, acceptInvalidHostnames: true },
-    });
+    const res = await tlsFetch(
+      fetch,
+      downloadUrl,
+      { method: 'HEAD', headers: withOriginSuppressed(headers) },
+      allowSelfSignedCert,
+    );
     if (!res.ok) return null;
     const fp = fingerprintFromHeaders(res.headers);
     return Object.keys(fp).length ? fp : null;
@@ -98,7 +107,10 @@ export const downloadAcquisitionFile = async (
   onProgress?: ProgressHandler,
 ): Promise<AcquisitionDownloadResult> => {
   const absoluteUrl = resolveURL(item.acquisitionHref, item.baseURL);
-  const { downloadUrl, headers } = await buildAuthDownload(absoluteUrl, catalog);
+  const { downloadUrl, headers, allowSelfSignedCert } = await buildAuthDownload(
+    absoluteUrl,
+    catalog,
+  );
 
   const parsed = parseMediaType(item.mimeType);
   const rawPathname = new URL(absoluteUrl).pathname;
@@ -121,7 +133,7 @@ export const downloadAcquisitionFile = async (
     url: downloadUrl,
     headers,
     singleThreaded: true,
-    skipSslVerification: true,
+    skipSslVerification: allowSelfSignedCert,
     onProgress,
   });
 
