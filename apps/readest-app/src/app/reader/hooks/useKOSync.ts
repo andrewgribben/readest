@@ -410,7 +410,10 @@ export const useKOSync = (bookKey: string, provider: KosyncProgressProvider = ko
       if (generation !== checksumGeneration.current) return;
       const remoteProgress = await kosyncClient.getProgress(book);
       if (generation !== checksumGeneration.current) return;
-      if (!remoteProgress || !remoteProgress.progress) {
+      if (
+        !remoteProgress ||
+        (!remoteProgress.progress && getRemoteFraction(remoteProgress) === undefined)
+      ) {
         setSyncState('synced');
         return;
       }

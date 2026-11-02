@@ -144,6 +144,53 @@ describe('AudiobookController', () => {
     await vi.waitFor(() => expect(controller.state).toBe('paused'));
   });
 
+  it('stops before loading the next file when a chapter ends at the file boundary', async () => {
+    await controller.shutdown();
+    controller = new AudiobookController(
+      {
+        ...source(),
+        chapters: [
+          { id: 0, start: 0, end: 100, title: 'One' },
+          { id: 1, start: 100, end: 200, title: 'Two' },
+        ],
+      },
+      clock,
+    );
+    await controller.start();
+    controller.stopAtChapterEnd = true;
+    clock.currentTime = 100;
+    clock.emit('ended');
+    await vi.waitFor(() => expect(controller.state).toBe('paused'));
+    expect(clock.url).toBe('http://x/f/1?token=t');
+    await controller.shutdown();
+  });
+
+  it('a periodic progress tick cannot hide a crossed chapter boundary', async () => {
+    vi.useFakeTimers();
+    try {
+      await controller.start();
+      controller.stopAtChapterEnd = true;
+      clock.currentTime = 91;
+      await vi.advanceTimersByTimeAsync(15_000);
+      clock.emit('timeupdate');
+      expect(controller.state).toBe('paused');
+    } finally {
+      await controller.shutdown();
+      vi.useRealTimers();
+    }
+  });
+
+  it('continues across a file boundary inside the same chapter', async () => {
+    await controller.start();
+    await controller.seekToTime(95);
+    controller.stopAtChapterEnd = true;
+    clock.currentTime = 100;
+    clock.emit('ended');
+    await vi.waitFor(() => expect(clock.url).toBe('http://x/f/2?token=t'));
+    expect(controller.state).toBe('playing');
+    await controller.shutdown();
+  });
+
   it('emits a chapter mark on chapter change', async () => {
     const marks: string[] = [];
     controller.addEventListener('tts-speak-mark', ((e: CustomEvent<{ text: string }>) =>

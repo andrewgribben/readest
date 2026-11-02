@@ -189,6 +189,9 @@ export const classifyAcquisitionLink = (
 
   // The download handler opens HTML in a browser rather than importing it.
   if (declared === 'text/html') return 'supported';
+  // Audio is streamed via an OPDSAUDIO/BOOKORBIT stub, never imported as a
+  // book file. Keep it out of the ebook acquisition picker (#6224).
+  if (isAudioLink(link)) return 'unsupported';
   if (getFileExtFromMimeType(getEffectiveMediaType(link))) return 'supported';
   const ext = hrefExt(href);
   if (SUPPORTED_BOOK_EXTS.includes(ext)) return 'supported';

@@ -3,7 +3,7 @@ import { collectAudiobookTextChapters } from '@/services/audiobook/mapping';
 import type { AudiobookChapter, AudiobookFile, PairedAudiobook } from '@/types/book';
 import { MediaOverlaySection, type NarrationPar } from './mediaOverlay/MediaOverlaySection';
 
-interface PairedChapterEntry {
+export interface PairedChapterEntry {
   tocItems: TOCItem[];
   sectionIndex: number;
   audioChapter: AudiobookChapter;
@@ -57,7 +57,7 @@ const mappedAudioSpans = (
   return spans;
 };
 
-const pairedChapterEntries = (
+export const pairedChapterEntries = (
   book: BookDoc,
   association: PairedAudiobook,
 ): PairedChapterEntry[] => {

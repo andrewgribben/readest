@@ -58,6 +58,7 @@ export function useOPDSSubscriptions() {
           appService,
           librarySnapshot,
           persistImportedBooks,
+          settings.bookorbit,
         );
 
         if (totalNewBooks > 0) {

@@ -91,6 +91,35 @@ describe('AbsProgressSyncer', () => {
     expect(resume).toBe(500);
   });
 
+  it('paired reporting starts at the audible position without selecting the server resume', async () => {
+    await syncer.beginReporting(123);
+    expect(client.getMe).not.toHaveBeenCalled();
+    expect(client.syncSession).toHaveBeenCalledWith('sess1', {
+      currentTime: 123,
+      timeListened: 0,
+      duration: 3600,
+    });
+  });
+
+  it('closes a late reporting session at the final position if playback ended during connection', async () => {
+    let opened!: (session: { id: string; currentTime: number }) => void;
+    client.openPlaybackSession.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          opened = resolve;
+        }),
+    );
+    const pending = syncer.beginReporting(20);
+    syncer.hooks().onEnd!(42);
+    opened({ id: 'late', currentTime: 500 });
+    await pending;
+    expect(client.closeSession).toHaveBeenCalledWith('late', {
+      currentTime: 42,
+      timeListened: 0,
+      duration: 3600,
+    });
+  });
+
   it("begin's book matching ignores mediaProgress entries with a truthy episodeId", async () => {
     // A book syncer (no episodeId) must not match an entry that carries a
     // truthy episodeId, even when libraryItemId matches. If it wrongly
