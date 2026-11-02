@@ -803,8 +803,15 @@ class NativeTTSPlugin(private val activity: Activity) : Plugin(activity) {
     private fun loadContinuousFile(path: String, positionMs: Double, start: Long?, end: Long?) {
         val next = playoutItem(path, start, end)
         val player = ensurePlayoutPlayer()
-        val startMs = MediaPlaybackService.takeRecordedPlayback(path)
-            ?: positionMs.coerceAtLeast(0.0).toLong()
+        // The recorded-playback hand-off matches by path alone, so it only
+        // applies to a standalone file load: a windowed segment of a book
+        // file shares its path with every other segment and must not pick up
+        // (or tear down) an unrelated recording in progress (#takeRecordedPlayback).
+        val startMs = if (start == null && end == null) {
+            MediaPlaybackService.takeRecordedPlayback(path) ?: positionMs.coerceAtLeast(0.0).toLong()
+        } else {
+            positionMs.coerceAtLeast(0.0).toLong()
+        }
 
         val index = playoutLoadedKeys.indexOf(next.key)
         if (index >= 0 && player.currentMediaItem != null) {

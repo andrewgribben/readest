@@ -488,7 +488,12 @@ class MediaPlaybackService : MediaBrowserServiceCompat() {
             val service = instance ?: return null
             if (service.recordedBook == null) return null
             val track = service.recordedTracks.getOrNull(service.player.currentMediaItemIndex)
-            val position = service.player.currentPosition.takeIf { service.recordedStarted && track?.path == path }
+            // Nothing to hand off: leave the service's recorded-playback state
+            // (and its player) alone so an unrelated load (a different book, or
+            // a windowed segment of a book file) does not tear down a recording
+            // that is still in progress and will never be matched.
+            if (!service.recordedStarted || track?.path != path) return null
+            val position = service.player.currentPosition
             service.player.pause()
             service.clearRecordedPlayback()
             service.player.stop()
