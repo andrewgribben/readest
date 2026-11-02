@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { OPDSCatalog, OPDSFeed } from '@/types/opds';
 import type { OPDSSubscriptionState } from '@/services/opds/types';
 import { MAX_CRAWL_DEPTH, MAX_FEEDS_PER_CRAWL } from '@/services/opds/types';
-import { checkFeedForNewItems, getSubsectionURLs } from '@/services/opds/feedChecker';
+import {
+  checkFeedForNewItems,
+  checkFeedForAllItems,
+  getSubsectionURLs,
+} from '@/services/opds/feedChecker';
 import { fetchWithAuth } from '@/app/opds/utils/opdsReq';
 
 vi.mock('@/services/environment', () => ({
@@ -66,6 +70,17 @@ const RAMONA_URL = 'https://files.example.com/books/Kids/Ramona/?opds';
 // URL → XML served by the mocked fetchWithAuth; set per test.
 let feeds: Record<string, string>;
 
+it('Update library discovers ebooks while leaving audiobook stubs out of the file-refresh queue', async () => {
+  feeds[BASE] = feedXML(
+    'Mixed',
+    bookEntry('ebook', 'Ebook', '/book.epub') +
+      bookEntry('audio', 'Audiobook', '/audio.mp3').replace('application/epub+zip', 'audio/mpeg'),
+  );
+  const items = await checkFeedForAllItems(makeCatalog());
+  expect(items).toHaveLength(1);
+  expect(items[0]?.entryId).toBe('ebook');
+});
+
 const makeCatalog = (): OPDSCatalog => ({ id: 'cat-1', name: 'Kids', url: BASE });
 
 const emptyState = (): OPDSSubscriptionState => ({
@@ -100,6 +115,46 @@ beforeEach(() => {
 });
 
 describe('checkFeedForNewItems directory crawl (#4272)', () => {
+  it('discovers ebooks and audiobook stubs beyond page five, including when earlier pages are known', async () => {
+    const state = emptyState();
+    for (let page = 1; page <= 6; page++) {
+      const url = page === 1 ? BASE : `${BASE}&page=${page}`;
+      const body =
+        bookEntry(`ebook-${page}`, `Ebook ${page}`, `/ebook-${page}.epub`) +
+        bookEntry(`audio-${page}`, `Audio ${page}`, `/audio-${page}.mp3`).replace(
+          'application/epub+zip',
+          'audio/mpeg',
+        );
+      feeds[url] = feedXML(
+        'Catalog',
+        body,
+        page < 6
+          ? `<link rel="next" href="${BASE.replaceAll('&', '&amp;')}&amp;page=${page + 1}"/>`
+          : '',
+      );
+      if (page < 6) state.knownEntryIds.push(`ebook-${page}`, `audio-${page}`);
+    }
+
+    const discovery = await checkFeedForNewItems(makeCatalog(), state);
+    expect(discovery.ebooks.map((item) => item.entryId)).toEqual(['ebook-6']);
+    expect(discovery.audiobooks.map((item) => item.entryId)).toContain('audio-6');
+    expect(fetchWithAuth).toHaveBeenCalledTimes(6);
+  });
+
+  it('bounds a long pagination chain by the shared crawl budget', async () => {
+    for (let page = 1; page <= MAX_FEEDS_PER_CRAWL + 1; page++) {
+      const url = page === 1 ? BASE : `${BASE}&page=${page}`;
+      feeds[url] = feedXML(
+        'Catalog',
+        bookEntry(`ebook-${page}`, `Ebook ${page}`, `/ebook-${page}.epub`),
+        `<link rel="next" href="${BASE}&amp;page=${page + 1}"/>`,
+      );
+    }
+    const discovery = await checkFeedForNewItems(makeCatalog(), emptyState());
+    expect(discovery.ebooks).toHaveLength(MAX_FEEDS_PER_CRAWL);
+    expect(fetchWithAuth).toHaveBeenCalledTimes(MAX_FEEDS_PER_CRAWL);
+  });
+
   it('collects books from subdirectories of a directory-style catalog', async () => {
     feeds[BASE] = feedXML(
       'Kids',

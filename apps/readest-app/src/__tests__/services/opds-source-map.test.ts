@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
-import { findBookByOPDSSources, upsertOPDSSourceMapping } from '@/services/opds/sourceMap';
+import {
+  findBookByOPDSSources,
+  findOPDSSourceMapping,
+  upsertOPDSSourceMapping,
+} from '@/services/opds/sourceMap';
 
 type Row = { catalog_id: string; source_url: string; book_hash: string };
 
@@ -41,6 +45,34 @@ const book = (hash: string, deletedAt?: number): Book => ({
 });
 
 describe('OPDS source map', () => {
+  it('persists and reads a verified entry revision with its source fingerprint', async () => {
+    const db = new MockDatabase();
+    const service = appService(db);
+    await upsertOPDSSourceMapping(service, {
+      catalogId: 'catalog',
+      sourceUrl: 'https://example.com/book.epub',
+      bookHash: 'book',
+      fingerprint: { contentLength: 100, entryUpdated: '2026-10-01T12:00:00Z' },
+    });
+    const [sql, params] = db.execute.mock.calls[0]!;
+    expect(sql).toContain('entry_updated');
+    expect(params?.at(-1)).toBe('2026-10-01T12:00:00Z');
+    const stored = {
+      book_hash: 'book',
+      content_length: 100,
+      entry_updated: '2026-10-01T12:00:00Z',
+    };
+    db.select.mockResolvedValueOnce([stored]);
+    const hit = await findOPDSSourceMapping(service, {
+      catalogId: 'catalog',
+      sourceUrls: ['https://example.com/book.epub'],
+      library: [book('book')],
+    });
+    expect(hit?.mapping.fingerprint).toEqual({
+      contentLength: 100,
+      entryUpdated: '2026-10-01T12:00:00Z',
+    });
+  });
   it('maps catalog acquisition URLs to library books', async () => {
     const db = new MockDatabase();
     const service = appService(db);

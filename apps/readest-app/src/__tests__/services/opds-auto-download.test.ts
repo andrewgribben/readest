@@ -3,6 +3,7 @@ import type { Book } from '@/types/book';
 import type { OPDSCatalog } from '@/types/opds';
 import type { AppService } from '@/types/system';
 import type { OPDSSubscriptionState, PendingItem } from '@/services/opds/types';
+import { useOPDSProgressStore, type OPDSCatalogProgress } from '@/store/opdsProgressStore';
 
 vi.mock('@/services/environment', () => ({
   isWebAppPlatform: vi.fn(() => false),
@@ -32,6 +33,7 @@ vi.mock('@/services/opds/feedChecker', () => ({
 }));
 
 vi.mock('@/services/opds/sourceMap', () => ({
+  fingerprintFromHeaders: vi.fn(() => ({})),
   upsertOPDSSourceMapping: vi.fn().mockResolvedValue(undefined),
   findBookByOPDSSources: vi.fn().mockResolvedValue(null),
 }));
@@ -90,6 +92,55 @@ describe('OPDS auto-download orchestrator', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     appService = createMockAppService();
+    useOPDSProgressStore.setState({ catalogs: {} });
+  });
+
+  it('reports real transfer percentages and successful counts, then removes catalog progress', async () => {
+    const snapshots: OPDSCatalogProgress[] = [];
+    const unsubscribe = useOPDSProgressStore.subscribe((state) => {
+      if (state.catalogs['cat-1']) snapshots.push(state.catalogs['cat-1']!);
+    });
+    vi.mocked(checkFeedForNewItems).mockResolvedValue({
+      ebooks: [
+        {
+          entryId: 'one',
+          title: 'First Book',
+          acquisitionHref: '/one.epub',
+          mimeType: 'application/epub+zip',
+          baseURL: 'https://example.com/opds',
+        },
+      ],
+      audiobooks: [],
+    });
+    vi.mocked(downloadFile).mockImplementationOnce(async ({ onProgress }) => {
+      onProgress?.({ progress: 50, total: 100, transferSpeed: 0 });
+      return {};
+    });
+    try {
+      await syncSubscribedCatalogs(
+        [
+          {
+            id: 'cat-1',
+            name: 'First Catalog',
+            url: 'https://example.com/opds',
+            autoDownload: true,
+          },
+        ],
+        appService,
+        [],
+      );
+    } finally {
+      unsubscribe();
+    }
+    expect(
+      snapshots.some(
+        (snapshot) =>
+          snapshot.total === 1 &&
+          snapshot.active.some((file) => file.title === 'First Book' && file.percent === 50),
+      ),
+    ).toBe(true);
+    expect(snapshots.some((snapshot) => snapshot.completed === 1)).toBe(true);
+    expect(useOPDSProgressStore.getState().catalogs['cat-1']).toBeUndefined();
   });
 
   it('skips catalogs without autoDownload enabled', async () => {
@@ -140,6 +191,7 @@ describe('OPDS auto-download orchestrator', () => {
     expect(savedState.knownEntryIds).toContain('urn:shelf:1');
     expect(savedState.lastCheckedAt).toBeGreaterThan(0);
     expect(upsertOPDSSourceMapping).toHaveBeenCalledWith(appService, {
+      fingerprint: {},
       catalogId: 'cat-1',
       sourceUrl: 'https://shelf.example.com/dl/1.epub',
       bookHash: 'abc123',

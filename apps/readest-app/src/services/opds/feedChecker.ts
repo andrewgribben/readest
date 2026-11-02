@@ -25,7 +25,7 @@ import type {
   PendingAudioItem,
   PendingItem,
 } from './types';
-import { MAX_CRAWL_DEPTH, MAX_FEEDS_PER_CRAWL, MAX_PAGES_PER_FEED } from './types';
+import { MAX_CRAWL_DEPTH, MAX_FEEDS_PER_CRAWL } from './types';
 
 const SORT_NEW_REL = 'http://opds-spec.org/sort/new';
 
@@ -359,7 +359,8 @@ interface CrawlContext {
 /**
  * Walk feeds breadth-first from an already-fetched start feed, collecting
  * new ebook downloads and audiobook stubs. Every feed's rel=next chain is
- * followed up to MAX_PAGES_PER_FEED pages. When ctx.crawlNav is set,
+ * followed until exhausted, within the shared MAX_FEEDS_PER_CRAWL budget.
+ * When ctx.crawlNav is set,
  * subsection navigation entries are followed too, at most MAX_CRAWL_DEPTH
  * levels below the start feed and MAX_FEEDS_PER_CRAWL fetches in total.
  */
@@ -369,9 +370,9 @@ async function crawlFeeds(
 ): Promise<CatalogDiscovery> {
   const ebooks: PendingItem[] = [];
   const audiobooks: PendingAudioItem[] = [];
-  const queue: Array<{ url: string; depth: number; page: number }> = [];
+  const queue: Array<{ url: string; depth: number }> = [];
 
-  const processFeed = (feed: OPDSFeed, baseURL: string, depth: number, page: number) => {
+  const processFeed = (feed: OPDSFeed, baseURL: string, depth: number) => {
     const newEbooks = collectNewEntries(feed, ctx.knownIds, baseURL);
     // Audiobook stubs are cheap and idempotent. Do not honor knownEntryIds:
     // a prior buggy sync may have permanently skipped an audio title after
@@ -384,11 +385,11 @@ async function crawlFeeds(
     audiobooks.push(...newAudio);
 
     const nextHref = getNextPageUrl(feed);
-    if (nextHref && page < MAX_PAGES_PER_FEED) {
+    if (nextHref) {
       const nextURL = resolveURL(nextHref, baseURL);
       if (!ctx.visited.has(nextURL)) {
         ctx.visited.add(nextURL);
-        queue.push({ url: nextURL, depth, page: page + 1 });
+        queue.push({ url: nextURL, depth });
       }
     }
 
@@ -396,12 +397,12 @@ async function crawlFeeds(
       for (const subURL of getSubsectionURLs(feed, baseURL)) {
         if (ctx.visited.has(subURL)) continue;
         ctx.visited.add(subURL);
-        queue.push({ url: subURL, depth: depth + 1, page: 1 });
+        queue.push({ url: subURL, depth: depth + 1 });
       }
     }
   };
 
-  processFeed(start.feed, start.baseURL, 0, 1);
+  processFeed(start.feed, start.baseURL, 0);
 
   let fetches = 1; // the start feed was already fetched by the caller
   while (queue.length > 0 && fetches < MAX_FEEDS_PER_CRAWL) {
@@ -415,11 +416,11 @@ async function crawlFeeds(
     );
     fetches++;
     if (!next) continue;
-    processFeed(next.feed, next.baseURL, node.depth, node.page);
+    processFeed(next.feed, next.baseURL, node.depth);
   }
   if (queue.length > 0) {
     console.warn(
-      `OPDS sync: catalog "${ctx.catalog.name}" crawl budget exhausted; ${queue.length} sub-feed(s) skipped`,
+      `OPDS sync: catalog "${ctx.catalog.name}" crawl budget exhausted; ${queue.length} feed page(s) skipped`,
     );
   }
 
@@ -483,4 +484,19 @@ export async function checkFeedForNewItems(
     return EMPTY_DISCOVERY;
   }
   return crawlFeeds(root, { ...ctx, crawlNav: true });
+}
+
+/**
+ * Every publication currently reachable under the catalog's crawl rules —
+ * ignoring `knownEntryIds`. Used by Update library to refresh already-synced
+ * books; discovery of *new* books stays on {@link checkFeedForNewItems}.
+ */
+export async function checkFeedForAllItems(catalog: OPDSCatalog): Promise<PendingItem[]> {
+  const discovery = await checkFeedForNewItems(catalog, {
+    catalogId: catalog.id,
+    lastCheckedAt: 0,
+    knownEntryIds: [],
+    failedEntries: [],
+  });
+  return discovery.ebooks;
 }
