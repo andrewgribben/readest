@@ -121,7 +121,18 @@ export const openOpdsAudiobookSession = async (input: {
   appService: AppService;
   book: Book;
 }): Promise<OpdsAudiobookSession | null> => {
-  const { appService, book } = input;
+  const { appService } = input;
+  let { book } = input;
+  const journal = await (
+    await import('@/services/audiobook/carPlayback')
+  ).importCarListeningCheckpoint(appService, book);
+  if (journal && journal.updatedAt > book.updatedAt) {
+    book = {
+      ...book,
+      progress: [journal.position, journal.duration],
+      updatedAt: journal.updatedAt,
+    };
+  }
   const data = parseOpdsAudioFilePath(book.filePath);
   if (!data || data.tracks.length === 0) return null;
 

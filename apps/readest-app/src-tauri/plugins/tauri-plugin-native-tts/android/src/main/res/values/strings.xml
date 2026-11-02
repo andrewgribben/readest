@@ -13,4 +13,9 @@
         <item quantity="other">%d books</item>
     </plurals>
     <string name="readest_auto_selection_failed">Couldn\'t open this book</string>
+    <string name="readest_auto_choose_position">Choose playback position</string>
+    <string name="readest_auto_resume_audio">Resume audiobook</string>
+    <string name="readest_auto_start_ebook">Start from ebook</string>
+    <string name="readest_auto_back_15">Back 15 seconds</string>
+    <string name="readest_auto_forward_30">Forward 30 seconds</string>
 </resources>

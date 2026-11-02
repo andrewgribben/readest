@@ -53,6 +53,7 @@ export const SKIP_BACKWARD_SEC = 15;
  */
 export interface PlaybackSource extends EventTarget {
   readonly kind: 'tts' | 'audiobook';
+  readonly recordedAudio?: boolean;
   readonly state: PlaybackState;
   readonly terminated: boolean;
   readonly isViewAttached: boolean;

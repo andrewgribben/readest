@@ -166,4 +166,8 @@ pub struct PlayoutPositionResponse {
     // Android: the item the playlist ended on, once nothing is current.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_index: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_book_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_position_ms: Option<f64>,
 }
