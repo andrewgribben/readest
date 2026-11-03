@@ -42,5 +42,6 @@ it('shares asset conversion and retains the final pause capture time while a tic
       capturedAt: new Date(2000).toISOString(),
       baseRevision: 2,
     }),
+    expect.anything(),
   );
 });

@@ -10,7 +10,12 @@ import { AbsProgressSyncer, writeLocalLastPlayedAt } from '@/services/audiobooks
 import { createBookOrbitClient } from '@/services/bookorbit/createClient';
 import { makeBookOrbitAudioFilePath } from '@/services/bookorbit/audiobookId';
 import { manifestTracks, manifestAssetIds } from '@/services/bookorbit/manifest';
-import { bookOrbitProgressHooks } from '@/services/bookorbit/progressSync';
+import {
+  BOOKORBIT_REQUEST_TIMEOUT_MS,
+  bookOrbitProgressHooks,
+  notifyBookOrbitDiverged,
+} from '@/services/bookorbit/progressSync';
+import { withTimeout } from '@/services/bookorbit/timeout';
 import { makeAbsFilePath } from '@/utils/audiobook';
 import { md5 } from '@/utils/md5';
 import { makeAudiobookProgressSaver } from './progressPersistence';
@@ -111,8 +116,14 @@ export const createPairedProgressHooks = (
     if (source?.kind === 'bookorbit') {
       const client = createBookOrbitClient();
       if (!client) return null;
-      const manifest = await client.getManifest(source.bookId);
-      const state = await client.getPlaybackState(source.bookId);
+      const manifest = await withTimeout(
+        (signal) => client.getManifest(source.bookId, signal),
+        BOOKORBIT_REQUEST_TIMEOUT_MS,
+      );
+      const state = await withTimeout(
+        (signal) => client.getPlaybackState(source.bookId, signal),
+        BOOKORBIT_REQUEST_TIMEOUT_MS,
+      );
       return bookOrbitProgressHooks(
         client,
         source.bookId,
@@ -121,6 +132,7 @@ export const createPairedProgressHooks = (
         manifest.revision,
         state?.revision ?? 0,
         () => {},
+        { onDiverged: notifyBookOrbitDiverged },
       );
     }
     return null;

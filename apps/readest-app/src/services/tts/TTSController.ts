@@ -888,6 +888,8 @@ export class TTSController extends EventTarget {
     listening: number | null;
     reading: number;
     live?: boolean;
+    /** The listening position is BookOrbit's, newer than anything on this device. */
+    fromServer?: boolean;
   } | null> {
     const association = this.#pairedAudiobook;
     const tts = this.#getTts();
@@ -911,6 +913,14 @@ export class TTSController extends EventTarget {
             entry,
           )
         : null;
+    // Another device (BookOrbit's own player, another phone) may have moved
+    // the shared position since this one last listened.
+    const server =
+      association.source?.kind === 'bookorbit'
+        ? await (
+            await import('@/services/bookorbit/pairedServerPosition')
+          ).fetchPairedServerCheckpoint(association.source)
+        : null;
     const checkpoint = selectListeningCheckpoint(
       [
         journal,
@@ -922,10 +932,15 @@ export class TTSController extends EventTarget {
               updatedAt: entry.updatedAt,
             }
           : null,
+        server,
       ],
       reading.duration,
     );
-    return { listening: checkpoint?.position ?? null, reading: reading.position };
+    return {
+      listening: checkpoint?.position ?? null,
+      reading: reading.position,
+      ...(server && checkpoint === server ? { fromServer: true } : {}),
+    };
   }
 
   /** Prepare an exact global checkpoint without reporting a seek or starting audio. */

@@ -14,7 +14,7 @@ import {
   parseBookOrbitAudioFilePath,
 } from '@/services/bookorbit/audiobookId';
 import { createBookOrbitClient } from '@/services/bookorbit/createClient';
-import { manifestChapters, manifestTracks } from '@/services/bookorbit/manifest';
+import { manifestAssetIds, manifestChapters, manifestTracks } from '@/services/bookorbit/manifest';
 import type { ABSChapter, ABSTrack } from '@/types/audiobookshelf';
 import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
@@ -37,6 +37,13 @@ export interface OpdsOfflineManifest {
   chapters: ABSChapter[];
   /** Each track's `contentUrl` is its file path relative to the Books dir. */
   tracks: ABSTrack[];
+  /**
+   * BookOrbit only: the server's asset id for each track, in track order, and
+   * the manifest revision they came from. Without them a downloaded book can
+   * neither read nor write the shared listening position.
+   */
+  assetIds?: string[];
+  manifestRevision?: string;
 }
 
 interface OfflineFile {
@@ -73,6 +80,14 @@ export const loadOpdsOfflineManifest = async (
   } catch {
     return null;
   }
+};
+
+export const saveOpdsOfflineManifest = async (
+  appService: AppService,
+  bookHash: string,
+  manifest: OpdsOfflineManifest,
+): Promise<void> => {
+  await appService.writeFile(getManifestPath(bookHash), 'Books', JSON.stringify(manifest));
 };
 
 const trackHeaders = (auth: OpdsAudioAuth): Record<string, string> => ({
@@ -217,6 +232,8 @@ export const downloadOpdsForOffline = async (
       duration: tracks.reduce((sum, track) => sum + track.duration, 0),
       chapters,
       tracks: tracks.map((track, i) => ({ ...track, contentUrl: files[i]!.path })),
+      assetIds: manifestAssetIds(manifest),
+      manifestRevision: manifest.revision,
     };
     await appService.writeFile(getManifestPath(book.hash), 'Books', JSON.stringify(offline));
     return;

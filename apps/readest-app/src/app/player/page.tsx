@@ -23,6 +23,7 @@ import { useOpenLaunchLinks } from '@/hooks/useOpenLaunchLinks';
 import { useTheme } from '@/hooks/useTheme';
 import { useTranslation } from '@/hooks/useTranslation';
 import { eventDispatcher } from '@/utils/event';
+import { useAudioPositionChoiceStore } from '@/store/audioPositionChoiceStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useThemeStore } from '@/store/themeStore';
 import { isAudiobook } from '@/utils/audiobook';
@@ -171,6 +172,19 @@ const PlayerRoute = () => {
               result: await openBookOrbitAudiobookSession({
                 appService: activeAppService,
                 book: resolvedBook,
+                chooseStart: async ({ bookHash, server, local }) => {
+                  const selection = await useAudioPositionChoiceStore.getState().request({
+                    kind: 'server',
+                    bookHash,
+                    listening: server,
+                    reading: local,
+                  });
+                  return selection === 'listening'
+                    ? 'server'
+                    : selection === 'reading'
+                      ? 'local'
+                      : null;
+                },
               }),
             };
           }

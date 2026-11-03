@@ -117,6 +117,23 @@ export const manifestAssetIds = (manifest: BookOrbitManifest): string[] =>
   [...manifest.assets].sort((a, b) => a.sequence - b.sequence).map((asset) => asset.assetId);
 
 /**
+ * The manifest's asset ids for tracks this device already holds, or null when
+ * the server's files no longer line up with them (count or a length changed).
+ * Used to give an older download, saved before asset ids were recorded, a way
+ * back to the shared position without guessing.
+ */
+export const matchingAssetIds = (
+  manifest: BookOrbitManifest,
+  tracks: ABSTrack[],
+): string[] | null => {
+  const fresh = manifestTracks(manifest);
+  if (fresh.length === 0 || fresh.length !== tracks.length) return null;
+  const sorted = [...tracks].sort((a, b) => a.index - b.index);
+  const aligned = fresh.every((track, i) => Math.abs(track.duration - sorted[i]!.duration) <= 1);
+  return aligned ? manifestAssetIds(manifest) : null;
+};
+
+/**
  * A BookOrbit playback position (an offset *within one asset*) as an offset
  * into the whole book. Reading it as a global position put every resume in the
  * first chapter, however far in the listener actually was.
