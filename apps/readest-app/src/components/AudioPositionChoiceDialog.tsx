@@ -11,12 +11,32 @@ export default function AudioPositionChoiceDialog() {
   const _ = useTranslation();
   const { pending, resolve } = useAudioPositionChoiceStore();
   if (!pending) return null;
+  if (pending.kind === 'server') {
+    return (
+      <Dialog
+        isOpen
+        title={_('Choose playback position')}
+        onClose={() => resolve(pending.id, null)}
+      >
+        <div className='flex flex-col gap-4 p-4'>
+          <p>{_('BookOrbit has a different listening position for this audiobook.')}</p>
+          <button className='btn btn-contrast' onClick={() => resolve(pending.id, 'listening')}>
+            {_('Continue from BookOrbit')} · {timestamp(pending.listening)}
+          </button>
+          <button className='btn eink-bordered' onClick={() => resolve(pending.id, 'reading')}>
+            {_('Stay on this device')} · {timestamp(pending.reading)}
+          </button>
+        </div>
+      </Dialog>
+    );
+  }
   return (
     <Dialog isOpen title={_('Choose playback position')} onClose={() => resolve(pending.id, null)}>
       <div className='flex flex-col gap-4 p-4'>
         <p>{_('Your audiobook and ebook are at different positions.')}</p>
         <button className='btn btn-contrast' onClick={() => resolve(pending.id, 'listening')}>
-          {_('Resume audiobook')} · {timestamp(pending.listening)}
+          {pending.listeningFromServer ? _('Resume from BookOrbit') : _('Resume audiobook')} ·{' '}
+          {timestamp(pending.listening)}
         </button>
         <button className='btn eink-bordered' onClick={() => resolve(pending.id, 'reading')}>
           {_('Start from ebook')} · {_('Approximately')} {timestamp(pending.reading)}

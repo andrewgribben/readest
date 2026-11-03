@@ -66,6 +66,15 @@ impl<R: Runtime> NativeBridge<R> {
             .run_mobile_plugin("save_image_to_gallery", payload)
             .map_err(Into::into)
     }
+
+    pub fn set_cover_wallpaper(
+        &self,
+        payload: SetCoverWallpaperRequest,
+    ) -> crate::Result<SetCoverWallpaperResponse> {
+        self.0
+            .run_mobile_plugin("set_cover_wallpaper", payload)
+            .map_err(Into::into)
+    }
 }
 
 impl<R: Runtime> NativeBridge<R> {

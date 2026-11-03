@@ -94,6 +94,9 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
   const [screenWakeLock, setScreenWakeLock] = useState(settings.screenWakeLock);
   const [autohideCursor, setAutohideCursor] = useState(settings.autohideCursor);
   const [gamepadEnabled, setGamepadEnabled] = useState(settings.gamepadEnabled);
+  const [coverWallpaperFollow, setCoverWallpaperFollow] = useState(
+    settings.coverWallpaperFollow ?? false,
+  );
   const [explorerThumbnails, setExplorerThumbnails] = useState(false);
   const [explorerThumbnailsBusy, setExplorerThumbnailsBusy] = useState(true);
   const [explorerThumbnailsError, setExplorerThumbnailsError] = useState(false);
@@ -484,6 +487,15 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     }
   };
 
+  const toggleCoverWallpaperFollow = async () => {
+    const newValue = !coverWallpaperFollow;
+    setCoverWallpaperFollow(newValue);
+    // Forget the last followed book so the current one is applied the next
+    // time the app goes to the background.
+    if (newValue) await saveSysSettings(envConfig, 'coverWallpaperFollowedHash', undefined);
+    await saveSysSettings(envConfig, 'coverWallpaperFollow', newValue);
+  };
+
   const getQuickActionOptions = () => {
     return [
       {
@@ -791,6 +803,15 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
           onChange={() => setGamepadEnabled(!gamepadEnabled)}
           data-setting-id='settings.control.gamepadEnabled'
         />
+        {appService?.isAndroidApp && (
+          <SettingsSwitchRow
+            label={_('Cover as Wallpaper')}
+            description={_('Follow the current book when leaving the app')}
+            checked={coverWallpaperFollow}
+            onChange={toggleCoverWallpaperFollow}
+            data-setting-id='settings.control.coverWallpaperFollow'
+          />
+        )}
       </BoxedList>
 
       {appService?.isWindowsApp && (

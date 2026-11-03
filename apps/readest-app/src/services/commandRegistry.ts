@@ -600,6 +600,12 @@ const controlPanelItems = [
     section: 'Device',
   },
   {
+    id: 'settings.control.coverWallpaperFollow',
+    labelKey: _('Cover as Wallpaper'),
+    keywords: ['wallpaper', 'cover', 'lock screen', 'home screen', 'background'],
+    section: 'Device',
+  },
+  {
     id: 'settings.control.allowJavascript',
     labelKey: _('Allow JavaScript'),
     keywords: ['javascript', 'js', 'script', 'security', 'allow'],

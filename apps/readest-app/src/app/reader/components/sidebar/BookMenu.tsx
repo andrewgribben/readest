@@ -13,6 +13,7 @@ import { useParallelViewStore } from '@/store/parallelViewStore';
 import { isWebAppPlatform } from '@/services/environment';
 import { eventDispatcher } from '@/utils/event';
 import { canPairAudiobook } from '@/utils/audiobook';
+import { setCoverWallpaperWithToast } from '@/services/wallpaper/setCoverWallpaperAction';
 import { FIXED_LAYOUT_FORMATS } from '@/types/book';
 import { DOWNLOAD_READEST_URL } from '@/services/constants';
 import { saveViewSettings } from '@/helpers/settings';
@@ -29,7 +30,7 @@ interface BookMenuProps {
 
 const BookMenu: React.FC<BookMenuProps> = ({ menuClassName, setIsDropdownOpen }) => {
   const _ = useTranslation();
-  const { envConfig } = useEnv();
+  const { envConfig, appService } = useEnv();
   const { settings } = useSettingsStore();
   const { bookKeys, recreateViewer, getViewSettings } = useReaderStore();
   const { getVisibleLibrary } = useLibraryStore();
@@ -71,6 +72,11 @@ const BookMenu: React.FC<BookMenuProps> = ({ menuClassName, setIsDropdownOpen })
     window.open(DOWNLOAD_READEST_URL, '_blank');
     setIsDropdownOpen?.(false);
   };
+  const handleSetCoverWallpaper = () => {
+    setIsDropdownOpen?.(false);
+    if (appService && bookData?.book) void setCoverWallpaperWithToast(appService, bookData.book, _);
+  };
+
   const handleExportAnnotations = () => {
     eventDispatcher.dispatch('export-annotations', { bookKey: sideBarBookKey });
     setIsDropdownOpen?.(false);
@@ -288,6 +294,9 @@ const BookMenu: React.FC<BookMenuProps> = ({ menuClassName, setIsDropdownOpen })
           }
           onClick={handleManageAudiobook}
         />
+      )}
+      {appService?.isAndroidApp && (
+        <MenuItem label={_('Set Cover as Wallpaper')} onClick={handleSetCoverWallpaper} />
       )}
       <hr aria-hidden='true' className='border-base-200 my-1' />
       <MenuItem label={_('Export Annotations')} onClick={handleExportAnnotations} />

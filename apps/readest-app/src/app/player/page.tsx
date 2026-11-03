@@ -20,9 +20,11 @@ import { useAppRouter } from '@/hooks/useAppRouter';
 import { useKeyDownActions } from '@/hooks/useKeyDownActions';
 import { useLibrary } from '@/hooks/useLibrary';
 import { useOpenLaunchLinks } from '@/hooks/useOpenLaunchLinks';
+import { useCoverWallpaperFollow } from '@/hooks/useCoverWallpaperFollow';
 import { useTheme } from '@/hooks/useTheme';
 import { useTranslation } from '@/hooks/useTranslation';
 import { eventDispatcher } from '@/utils/event';
+import { useAudioPositionChoiceStore } from '@/store/audioPositionChoiceStore';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useThemeStore } from '@/store/themeStore';
 import { isAudiobook } from '@/utils/audiobook';
@@ -53,6 +55,7 @@ const PlayerRoute = () => {
   useTheme({ systemUIVisible: false });
 
   const id = searchParams?.get('id') ?? '';
+  useCoverWallpaperFollow(id || undefined);
 
   // Local copy, set once per genuine `id` change inside the effect below -
   // NOT a reactive subscription to the library store. Title/author/cover
@@ -171,6 +174,19 @@ const PlayerRoute = () => {
               result: await openBookOrbitAudiobookSession({
                 appService: activeAppService,
                 book: resolvedBook,
+                chooseStart: async ({ bookHash, server, local }) => {
+                  const selection = await useAudioPositionChoiceStore.getState().request({
+                    kind: 'server',
+                    bookHash,
+                    listening: server,
+                    reading: local,
+                  });
+                  return selection === 'listening'
+                    ? 'server'
+                    : selection === 'reading'
+                      ? 'local'
+                      : null;
+                },
               }),
             };
           }

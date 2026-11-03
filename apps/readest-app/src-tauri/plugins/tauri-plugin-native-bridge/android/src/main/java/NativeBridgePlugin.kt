@@ -101,6 +101,13 @@ class SaveImageToGalleryRequestArgs {
 }
 
 @InvokeArg
+class SetCoverWallpaperRequestArgs {
+    var coverPath: String? = null
+    var home: Boolean = true
+    var lock: Boolean = true
+}
+
+@InvokeArg
 class InstallPackageRequestArgs {
     var path: String? = null
 }
@@ -784,6 +791,34 @@ class NativeBridgePlugin(private val activity: Activity): Plugin(activity) {
                     // failure from a bug report.
                     Log.e("NativeBridge", "Failed to save image to gallery", e)
                     r.put("success", false)
+                    r.put("error", "${e.javaClass.simpleName}: ${e.message}")
+                }
+                r
+            }
+            if (isActive) invoke.resolve(ret)
+        }
+    }
+
+    @Command
+    fun set_cover_wallpaper(invoke: Invoke) {
+        val args = invoke.parseArgs(SetCoverWallpaperRequestArgs::class.java)
+        pluginScope.launch {
+            val ret = withContext(Dispatchers.IO) {
+                val r = JSObject()
+                try {
+                    val result = CoverWallpaper.apply(
+                        activity.applicationContext,
+                        args.coverPath ?: "",
+                        args.home,
+                        args.lock,
+                    )
+                    r.put("home", result.home)
+                    r.put("lock", result.lock)
+                    result.error?.let { r.put("error", it) }
+                } catch (e: Exception) {
+                    Log.e("NativeBridge", "Failed to set cover wallpaper", e)
+                    r.put("home", false)
+                    r.put("lock", false)
                     r.put("error", "${e.javaClass.simpleName}: ${e.message}")
                 }
                 r

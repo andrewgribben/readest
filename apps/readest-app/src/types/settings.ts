@@ -498,6 +498,13 @@ export interface SystemSettings {
    * otherwise land twice (issue #5979).
    */
   gamepadEnabled: boolean;
+  /**
+   * Android: when the book being read or listened to changes, set its cover as
+   * the wallpaper (sharp on the lock screen, blurred on the home screen).
+   */
+  coverWallpaperFollow: boolean;
+  /** The book the wallpaper was last set to follow; a change re-applies it. */
+  coverWallpaperFollowedHash?: string;
   /** Mouse wheel down turns to the previous page in paginated mode (#6439). */
   reverseWheelPaging: boolean;
   /** Hide the e-ink library's Previous/Next buttons; keys still page. */

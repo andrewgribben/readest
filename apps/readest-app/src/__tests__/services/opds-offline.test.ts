@@ -246,6 +246,10 @@ describe('downloadOpdsForOffline — BOOKORBIT', () => {
     const manifest = JSON.parse(files.get(`${getOpdsOfflineDir('bohash')}/manifest.json`)!);
     expect(manifest.kind).toBe('bookorbit');
     expect(manifest.chapters).toHaveLength(1);
+    // Kept so the downloaded copy can still read and share the server position.
+    expect(manifest.assetIds).toHaveLength(manifest.tracks.length);
+    expect(manifest.assetIds[0]).toBe('aud_0');
+    expect(typeof manifest.manifestRevision).toBe('string');
   });
 });
 

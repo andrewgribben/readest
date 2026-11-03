@@ -232,6 +232,7 @@ export const DEFAULT_SYSTEM_SETTINGS: Partial<SystemSettings> = {
     },
   },
   gamepadEnabled: true,
+  coverWallpaperFollow: false,
   reverseWheelPaging: false,
   hideBookshelfPageButtons: true,
   openLastBooks: false,

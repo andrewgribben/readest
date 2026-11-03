@@ -47,6 +47,14 @@ pub(crate) async fn save_image_to_gallery<R: Runtime>(
 }
 
 #[command]
+pub(crate) async fn set_cover_wallpaper<R: Runtime>(
+    app: AppHandle<R>,
+    payload: SetCoverWallpaperRequest,
+) -> Result<SetCoverWallpaperResponse> {
+    app.native_bridge().set_cover_wallpaper(payload)
+}
+
+#[command]
 pub(crate) async fn use_background_audio<R: Runtime>(
     app: AppHandle<R>,
     payload: UseBackgroundAudioRequest,

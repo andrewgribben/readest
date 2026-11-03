@@ -58,6 +58,7 @@ const COMMANDS: &[&str] = &[
     "start_raw_drawing",
     "stop_raw_drawing",
     "update_reading_widget",
+    "set_cover_wallpaper",
     "get_reading_widget_instances",
     "set_reading_widget_catalog",
     "capture_webview_region",

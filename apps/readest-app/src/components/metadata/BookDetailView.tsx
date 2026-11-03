@@ -6,6 +6,7 @@ import {
   MdOutlineDelete,
   MdOutlineDownloadForOffline,
   MdOutlineEdit,
+  MdOutlineWallpaper,
   MdMenu,
   MdExpandMore,
   MdExpandLess,
@@ -77,7 +78,7 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
   onMetadataValueClick,
 }) => {
   const _ = useTranslation();
-  const { envConfig } = useEnv();
+  const { envConfig, appService } = useEnv();
   const { settings } = useSettingsStore();
   const { skeuomorphicCovers } = useDefaultBookshelfCovers();
   const [subjectsExpanded, setSubjectsExpanded] = useState(false);
@@ -176,6 +177,22 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
                 {offlinePremiumLabel && (
                   <span className='badge badge-sm badge-ghost'>{offlinePremiumLabel}</span>
                 )}
+              </button>
+            )}
+            {appService?.isAndroidApp && (
+              <button
+                onClick={async () => {
+                  // Loaded on demand: the wallpaper service pulls in the library
+                  // and settings stores, which this view otherwise doesn't need.
+                  const { setCoverWallpaperWithToast } = await import(
+                    '@/services/wallpaper/setCoverWallpaperAction'
+                  );
+                  await setCoverWallpaperWithToast(appService, book, _);
+                }}
+                title={_('Set Cover as Wallpaper')}
+                aria-label={_('Set Cover as Wallpaper')}
+              >
+                <MdOutlineWallpaper className='fill-base-content' />
               </button>
             )}
             {onDelete && (
