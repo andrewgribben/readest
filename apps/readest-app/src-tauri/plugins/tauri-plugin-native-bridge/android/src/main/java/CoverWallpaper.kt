@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import java.io.File
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
@@ -17,11 +18,14 @@ import kotlin.math.roundToInt
  * foldable that is done per display, which a crop computed here could not do.
  */
 object CoverWallpaper {
-    /** Covers smaller than this (long side) are scaled up before blurring so the blur stays smooth. */
+    /** Covers smaller than this (long side) are scaled up so the wallpaper isn't soft. */
     private const val MIN_LONG_SIDE = 1600
 
-    /** How far the blur pyramid shrinks the image; larger is blurrier. */
-    private const val BLUR_DOWNSCALE = 24
+    /** The blur runs on a copy this size (long side): cheap, and still smooth once scaled up. */
+    private const val BLUR_WORK_LONG_SIDE = 480
+
+    /** Box radius at the working size; three passes give a Gaussian of sigma ~= radius. */
+    private const val BLUR_RADIUS = 14
 
     data class Result(val home: Boolean, val lock: Boolean, val error: String? = null)
 
@@ -30,7 +34,7 @@ object CoverWallpaper {
         if (!file.exists()) return Result(false, false, "Cover file does not exist")
         val decoded = BitmapFactory.decodeFile(file.absolutePath)
             ?: return Result(false, false, "Cover could not be decoded")
-        val cover = ensureMinSize(decoded, MIN_LONG_SIDE)
+        val cover = scaleLongSide(decoded, max(MIN_LONG_SIDE, max(decoded.width, decoded.height)))
         val manager = WallpaperManager.getInstance(context)
         if (!manager.isWallpaperSupported || !manager.isSetWallpaperAllowed) {
             return Result(false, false, "Wallpaper changes are not allowed on this device")
@@ -40,9 +44,9 @@ object CoverWallpaper {
         var homeOk = false
         var lockOk = false
         if (home) {
-            val blurred = blur(cover, BLUR_DOWNSCALE)
+            val blurred = blur(cover)
             homeOk = manager.setBitmap(blurred, null, true, WallpaperManager.FLAG_SYSTEM) != 0
-            if (blurred !== cover) blurred.recycle()
+            blurred.recycle()
         }
         if (lock) {
             lockOk = manager.setBitmap(cover, null, true, WallpaperManager.FLAG_LOCK) != 0
@@ -52,53 +56,91 @@ object CoverWallpaper {
         return Result(homeOk, lockOk)
     }
 
-    private fun ensureMinSize(src: Bitmap, minLongSide: Int): Bitmap {
-        val long = max(src.width, src.height)
-        if (long >= minLongSide) return src
-        val scale = minLongSide.toFloat() / long
+    private fun scaleLongSide(src: Bitmap, longSide: Int): Bitmap {
+        val current = max(src.width, src.height)
+        if (current == longSide) return src
+        val scale = longSide.toFloat() / current
         return Bitmap.createScaledBitmap(
             src,
-            (src.width * scale).roundToInt(),
-            (src.height * scale).roundToInt(),
+            max(1, (src.width * scale).roundToInt()),
+            max(1, (src.height * scale).roundToInt()),
             true,
         )
     }
 
     /**
-     * A dependency-free blur: halve the image with bilinear filtering until it
-     * is [downscale] times smaller, then double it back up the same way. Each
-     * step averages neighbouring pixels, so the result is close to a Gaussian
-     * without RenderScript (deprecated) or a View to draw a RenderEffect on.
+     * A smooth Gaussian-like blur at the bitmap's own size. Blurs a reduced
+     * copy (the result has no detail left to lose), then scales it back up
+     * with filtering, which on an already-smooth image adds no blockiness.
      */
-    fun blur(src: Bitmap, downscale: Int): Bitmap {
-        val steps = blurSteps(downscale)
-        val sizes = mutableListOf(src.width to src.height)
-        var current = src
-        repeat(steps) {
-            val w = max(1, current.width / 2)
-            val h = max(1, current.height / 2)
-            val next = Bitmap.createScaledBitmap(current, w, h, true)
-            if (current !== src) current.recycle()
-            current = next
-            sizes.add(w to h)
-        }
-        for (i in sizes.size - 2 downTo 0) {
-            val (w, h) = sizes[i]
-            val next = Bitmap.createScaledBitmap(current, w, h, true)
-            current.recycle()
-            current = next
-        }
-        return current
+    fun blur(src: Bitmap): Bitmap {
+        val work = scaleLongSide(src, min(BLUR_WORK_LONG_SIDE, max(src.width, src.height)))
+        val w = work.width
+        val h = work.height
+        val pixels = IntArray(w * h)
+        work.getPixels(pixels, 0, w, 0, 0, w, h)
+        val blurredPixels = gaussianBlur(pixels, w, h, BLUR_RADIUS)
+        val blurred = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        blurred.setPixels(blurredPixels, 0, w, 0, 0, w, h)
+        if (work !== src) work.recycle()
+        val out = Bitmap.createScaledBitmap(blurred, src.width, src.height, true)
+        if (out !== blurred) blurred.recycle()
+        return out
     }
 
-    /** Number of halvings needed to shrink by at least [downscale]. */
-    fun blurSteps(downscale: Int): Int {
-        var steps = 0
-        var factor = 1
-        while (factor < downscale) {
-            factor *= 2
-            steps++
+    /**
+     * Approximates a Gaussian with three passes of a separable box blur
+     * (sigma ~= radius). Edges clamp, so the borders don't darken.
+     * Pure function on ARGB pixels, so it runs in host JVM tests.
+     */
+    fun gaussianBlur(pixels: IntArray, width: Int, height: Int, radius: Int): IntArray {
+        if (radius < 1 || width < 1 || height < 1) return pixels.copyOf()
+        val a = pixels.copyOf()
+        val b = IntArray(a.size)
+        repeat(3) {
+            boxBlurLine(a, b, width, height, radius, horizontal = true)
+            boxBlurLine(b, a, width, height, radius, horizontal = false)
         }
-        return steps
+        return a
+    }
+
+    private fun boxBlurLine(
+        src: IntArray,
+        dst: IntArray,
+        width: Int,
+        height: Int,
+        radius: Int,
+        horizontal: Boolean,
+    ) {
+        val lines = if (horizontal) height else width
+        val length = if (horizontal) width else height
+        val step = if (horizontal) 1 else width
+        val window = 2 * radius + 1
+        for (line in 0 until lines) {
+            val start = if (horizontal) line * width else line
+            var sa = 0
+            var sr = 0
+            var sg = 0
+            var sb = 0
+            for (k in -radius..radius) {
+                val p = src[start + k.coerceIn(0, length - 1) * step]
+                sa += p ushr 24
+                sr += (p shr 16) and 0xFF
+                sg += (p shr 8) and 0xFF
+                sb += p and 0xFF
+            }
+            for (i in 0 until length) {
+                dst[start + i * step] = ((sa / window) shl 24) or
+                    ((sr / window) shl 16) or
+                    ((sg / window) shl 8) or
+                    (sb / window)
+                val out = src[start + (i - radius).coerceIn(0, length - 1) * step]
+                val inn = src[start + (i + radius + 1).coerceIn(0, length - 1) * step]
+                sa += (inn ushr 24) - (out ushr 24)
+                sr += ((inn shr 16) and 0xFF) - ((out shr 16) and 0xFF)
+                sg += ((inn shr 8) and 0xFF) - ((out shr 8) and 0xFF)
+                sb += (inn and 0xFF) - (out and 0xFF)
+            }
+        }
     }
 }
