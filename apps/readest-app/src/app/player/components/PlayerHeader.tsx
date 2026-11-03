@@ -1,6 +1,7 @@
 import clsx from 'clsx';
 import { useRef } from 'react';
 import { IoArrowBack } from 'react-icons/io5';
+import { MdOutlineWallpaper } from 'react-icons/md';
 import { useEnv } from '@/context/EnvContext';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useResponsiveSize } from '@/hooks/useResponsiveSize';
@@ -11,9 +12,11 @@ interface PlayerHeaderProps {
   title: string;
   subtitle: string;
   onGoBack: () => void;
+  /** Set the book's cover as the wallpaper (Android only). */
+  onSetWallpaper?: () => void;
 }
 
-const PlayerHeader = ({ title, subtitle, onGoBack }: PlayerHeaderProps) => {
+const PlayerHeader = ({ title, subtitle, onGoBack, onSetWallpaper }: PlayerHeaderProps) => {
   const _ = useTranslation();
   const { appService } = useEnv();
   const headerRef = useRef<HTMLDivElement>(null);
@@ -43,6 +46,17 @@ const PlayerHeader = ({ title, subtitle, onGoBack }: PlayerHeaderProps) => {
         <span className='line-clamp-1 text-sm font-semibold'>{title}</span>
         <span className='text-base-content/70 line-clamp-1 text-xs'>{subtitle}</span>
       </div>
+      {onSetWallpaper && (
+        <button
+          type='button'
+          aria-label={_('Set Cover as Wallpaper')}
+          title={_('Set Cover as Wallpaper')}
+          onClick={onSetWallpaper}
+          className='btn btn-ghost btn-circle z-10 ms-auto flex h-9 min-h-9 w-9'
+        >
+          <MdOutlineWallpaper size={iconSize24 * 0.85} />
+        </button>
+      )}
       {appService?.hasWindowBar && (
         <WindowButtons
           className='z-10 ms-auto'

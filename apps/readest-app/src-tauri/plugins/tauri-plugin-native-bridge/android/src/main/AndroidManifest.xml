@@ -7,6 +7,10 @@
          ACTION_PROCESS_TEXT, so dictionary lookups land in the system
          browser on some OEM ROMs even when a dictionary is installed
          (issue #4559). -->
+    <!-- Normal permission (granted at install, no prompt): set a book cover as
+         the home and lock screen wallpaper. -->
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
+
     <queries>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT" />

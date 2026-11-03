@@ -6,6 +6,7 @@ import {
   MdOutlineDelete,
   MdOutlineDownloadForOffline,
   MdOutlineEdit,
+  MdOutlineWallpaper,
   MdMenu,
   MdExpandMore,
   MdExpandLess,
@@ -34,6 +35,7 @@ import {
 } from '@/utils/book';
 import { isFeedBook } from '@/services/rss/feedBookUrl';
 import { saveSysSettings } from '@/helpers/settings';
+import { setCoverWallpaperWithToast } from '@/services/wallpaper/setCoverWallpaperAction';
 import BookCover from '@/components/BookCover';
 import BookCoverViewer, { useBookCoverViewer } from '@/components/BookCoverViewer';
 import Dropdown from '../Dropdown';
@@ -77,7 +79,7 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
   onMetadataValueClick,
 }) => {
   const _ = useTranslation();
-  const { envConfig } = useEnv();
+  const { envConfig, appService } = useEnv();
   const { settings } = useSettingsStore();
   const { skeuomorphicCovers } = useDefaultBookshelfCovers();
   const [subjectsExpanded, setSubjectsExpanded] = useState(false);
@@ -176,6 +178,15 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
                 {offlinePremiumLabel && (
                   <span className='badge badge-sm badge-ghost'>{offlinePremiumLabel}</span>
                 )}
+              </button>
+            )}
+            {appService?.isAndroidApp && (
+              <button
+                onClick={() => setCoverWallpaperWithToast(appService, book, _)}
+                title={_('Set Cover as Wallpaper')}
+                aria-label={_('Set Cover as Wallpaper')}
+              >
+                <MdOutlineWallpaper className='fill-base-content' />
               </button>
             )}
             {onDelete && (

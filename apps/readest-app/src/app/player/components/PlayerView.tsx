@@ -33,6 +33,7 @@ import Dialog from '@/components/Dialog';
 import Spinner from '@/components/Spinner';
 import EpisodesView from './EpisodesView';
 import PlayerHeader from './PlayerHeader';
+import { setCoverWallpaperWithToast } from '@/services/wallpaper/setCoverWallpaperAction';
 
 type PlayerSubView = 'main' | 'speed' | 'timer' | 'chapters' | 'episodes';
 
@@ -256,7 +257,16 @@ const PlayerView = ({
 
   return (
     <div className='bg-base-100 flex h-full w-full flex-col overflow-hidden'>
-      <PlayerHeader title={headingTitle} subtitle={headingSubtitle} onGoBack={onGoBack} />
+      <PlayerHeader
+        title={headingTitle}
+        subtitle={headingSubtitle}
+        onGoBack={onGoBack}
+        onSetWallpaper={
+          appService?.isAndroidApp
+            ? () => void setCoverWallpaperWithToast(appService, book, _)
+            : undefined
+        }
+      />
       <div className='flex w-full flex-1 flex-col items-center gap-4 overflow-y-auto px-4 pb-6 pt-2'>
         {book.coverImageUrl && !coverFailed ? (
           // eslint-disable-next-line @next/next/no-img-element

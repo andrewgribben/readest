@@ -162,6 +162,29 @@ export async function saveImageToGallery(
   });
 }
 
+export interface SetCoverWallpaperRequest {
+  /** Absolute path of the cover image on disk. */
+  coverPath: string;
+  /** Blurred cover on the home screen. */
+  home: boolean;
+  /** Sharp cover on the lock screen. */
+  lock: boolean;
+}
+
+export interface SetCoverWallpaperResponse {
+  home: boolean;
+  lock: boolean;
+  error?: string;
+}
+
+export async function setCoverWallpaper(
+  request: SetCoverWallpaperRequest,
+): Promise<SetCoverWallpaperResponse> {
+  return await invoke<SetCoverWallpaperResponse>('plugin:native-bridge|set_cover_wallpaper', {
+    payload: request,
+  });
+}
+
 export async function invokeUseBackgroundAudio(request: UseBackgroundAudioRequest): Promise<void> {
   await invoke('plugin:native-bridge|use_background_audio', {
     payload: request,

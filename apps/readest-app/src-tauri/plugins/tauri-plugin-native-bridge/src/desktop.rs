@@ -74,6 +74,13 @@ impl<R: Runtime> NativeBridge<R> {
         Err(crate::Error::UnsupportedPlatformError)
     }
 
+    pub fn set_cover_wallpaper(
+        &self,
+        _payload: SetCoverWallpaperRequest,
+    ) -> crate::Result<SetCoverWallpaperResponse> {
+        Err(crate::Error::UnsupportedPlatformError)
+    }
+
     pub fn use_background_audio(&self, _payload: UseBackgroundAudioRequest) -> crate::Result<()> {
         Err(crate::Error::UnsupportedPlatformError)
     }

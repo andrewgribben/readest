@@ -59,6 +59,25 @@ pub struct SaveImageToGalleryRequest {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SetCoverWallpaperRequest {
+    /// Absolute path of the cover image on disk.
+    pub cover_path: String,
+    /// Set the blurred cover as the home screen wallpaper.
+    pub home: bool,
+    /// Set the sharp cover as the lock screen wallpaper.
+    pub lock: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCoverWallpaperResponse {
+    pub home: bool,
+    pub lock: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveImageToGalleryResponse {
     pub success: bool,
     /// MediaStore content URI of the saved image on success.

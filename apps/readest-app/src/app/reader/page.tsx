@@ -7,6 +7,9 @@ import { useAppUrlIngress } from '@/hooks/useAppUrlIngress';
 import { useOpenWithBooks } from '@/hooks/useOpenWithBooks';
 import { useOpenLaunchLinks } from '@/hooks/useOpenLaunchLinks';
 import { useHomeScreenWidgets } from '@/hooks/useHomeScreenWidgets';
+import { useCoverWallpaperFollow } from '@/hooks/useCoverWallpaperFollow';
+import { useSearchParams } from 'next/navigation';
+import { BOOK_IDS_SEPARATOR } from '@/services/constants';
 import { useOpenShareLink } from '@/hooks/useOpenShareLink';
 import { useOpenDeviceLink } from '@/hooks/useOpenDeviceLink';
 import { useClipUrlIngress } from '@/hooks/useClipUrlIngress';
@@ -27,6 +30,8 @@ export default function Page() {
   useOpenWithBooks();
   useOpenLaunchLinks();
   useHomeScreenWidgets();
+  const searchParams = useSearchParams();
+  useCoverWallpaperFollow(searchParams?.get('ids')?.split(BOOK_IDS_SEPARATOR)[0] || undefined);
   useOpenShareLink();
   useOpenDeviceLink();
   useClipUrlIngress();
