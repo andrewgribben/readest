@@ -18,6 +18,8 @@ import {
   pickPreferredLink,
 } from '@/services/opds/formats';
 import { useTranslation } from '@/hooks/useTranslation';
+import { useLibraryStore } from '@/store/libraryStore';
+import { useTransferStore } from '@/store/transferStore';
 import { formatDate, formatLanguage } from '@/utils/book';
 import { getImportErrorMessage, ImportError } from '@/services/errors';
 import { eventDispatcher } from '@/utils/event';
@@ -49,6 +51,10 @@ interface PublicationViewProps {
   ) => Promise<Book | null | undefined>;
   onStream?: (href: string, count: number, title: string, author: string) => void;
   onPlayAudio?: (tracks: OpdsAudioTrackLink[], title: string, author: string) => void;
+  /** Keep the audiobook on the device for offline listening, without playing it. */
+  onDownloadAudio?: (tracks: OpdsAudioTrackLink[], title: string, author: string) => void;
+  /** The library hash this audio entry has once played or downloaded. */
+  getAudioBookHash?: (tracks: OpdsAudioTrackLink[], title: string, author: string) => string;
   onGenerateCachedImageUrl: (url: string, cacheVersion?: string) => Promise<string>;
 }
 
@@ -61,6 +67,8 @@ export function PublicationView({
   onDownload,
   onStream,
   onPlayAudio,
+  onDownloadAudio,
+  getAudioBookHash,
   onGenerateCachedImageUrl,
 }: PublicationViewProps) {
   const _ = useTranslation();
@@ -159,6 +167,33 @@ export function PublicationView({
         })),
     [allAcquisitionLinks],
   );
+
+  // Whether this audiobook is already on the device, or on its way. Read from
+  // the stores rather than local state so it stays right when the download was
+  // started from the bookshelf, or finishes after leaving and returning here.
+  const audioBookHash = useMemo(
+    () =>
+      audioTracks.length > 0 && getAudioBookHash
+        ? getAudioBookHash(audioTracks, publication.metadata?.title || '', authorNames.join(' & '))
+        : null,
+    [audioTracks, getAudioBookHash, publication.metadata?.title, authorNames],
+  );
+  const audioDownloaded = useLibraryStore(
+    (state) =>
+      !!audioBookHash &&
+      state.library.some(
+        (book) => book.hash === audioBookHash && !book.deletedAt && !!book.opdsDownloadedAt,
+      ),
+  );
+  const audioTransfer = useTransferStore((state) =>
+    audioBookHash ? state.getTransferByBookHash(audioBookHash, 'download') : undefined,
+  );
+  const audioDownloadState: 'none' | 'downloading' | 'downloaded' = audioDownloaded
+    ? 'downloaded'
+    : audioTransfer
+      ? 'downloading'
+      : 'none';
+  const audioDownloadProgress = Math.round(audioTransfer?.progress ?? 0);
 
   const handleActionButton = async (href: string, type?: string, forceDownload = false) => {
     if (downloadedBook && !forceDownload) {
@@ -502,6 +537,29 @@ export function PublicationView({
                   className={clsx('btn btn-secondary min-w-20 rounded-3xl')}
                 >
                   {_('Play')}
+                </button>
+              )}
+
+              {audioTracks.length > 0 && onDownloadAudio && (
+                <button
+                  type='button'
+                  onClick={() =>
+                    onDownloadAudio(
+                      audioTracks,
+                      publication.metadata?.title || '',
+                      authorNames.join(' & '),
+                    )
+                  }
+                  disabled={audioDownloadState !== 'none'}
+                  className={clsx('btn btn-secondary min-w-20 rounded-3xl')}
+                >
+                  {audioDownloadState === 'downloaded'
+                    ? _('Downloaded')
+                    : audioDownloadState === 'downloading'
+                      ? audioDownloadProgress > 0
+                        ? `${_('Downloading')} ${audioDownloadProgress}%`
+                        : _('Downloading')
+                      : _('Download')}
                 </button>
               )}
 

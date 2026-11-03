@@ -2,6 +2,14 @@ import { create } from 'zustand';
 
 export interface AudioPositionChoice {
   id: number;
+  /**
+   * 'ebook' (default): a paired audiobook vs the ebook's reading position.
+   * 'server': a standalone audiobook's BookOrbit position (`listening`) vs this
+   * device's (`reading`).
+   */
+  kind?: 'ebook' | 'server';
+  /** For 'ebook': the listening position came from the BookOrbit server. */
+  listeningFromServer?: boolean;
   bookHash: string;
   listening: number;
   reading: number;

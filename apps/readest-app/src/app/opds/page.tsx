@@ -7,7 +7,7 @@ import { isOPDSCatalog, getPublication, getFeed, getOpenSearch } from 'foliate-j
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { useEnv } from '@/context/EnvContext';
 import { useAuth } from '@/context/AuthContext';
-import { isWebAppPlatform } from '@/services/environment';
+import { isTauriAppPlatform, isWebAppPlatform } from '@/services/environment';
 import { downloadFile } from '@/libs/storage';
 import { Toast } from '@/components/Toast';
 import { useThemeStore } from '@/store/themeStore';
@@ -56,7 +56,8 @@ import { autoPairBookOrbitAudiobook, loadEbookChapterIds } from '@/services/book
 import { BookOrbitClient } from '@/services/bookorbit/client';
 import { pickAudioLinks } from '@/services/opds/audiobook';
 import type { OpdsAudioTrackLink } from '@/services/opds/audiobook';
-import { ensureOpdsAudiobookStub } from '@/services/opds/audiobookStub';
+import { ensureOpdsAudiobookStub, opdsAudiobookStubIdentity } from '@/services/opds/audiobookStub';
+import { useAbsOfflineDownload } from '@/app/library/hooks/useAbsOfflineDownload';
 import type { Book } from '@/types/book';
 import { FeedView } from './components/FeedView';
 import { PublicationView } from './components/PublicationView';
@@ -779,42 +780,77 @@ export default function BrowserPage() {
     [state.baseURL, catalogId, appService, libraryLoaded, router, _],
   );
 
+  const { handleBookOfflineDownload } = useAbsOfflineDownload();
+
+  const resolveAudioTracks = useCallback(
+    (tracks: OpdsAudioTrackLink[]) =>
+      tracks.map((track) => ({ ...track, href: resolveURL(track.href, state.baseURL) })),
+    [state.baseURL],
+  );
+
+  // The library hash an audio entry has (or will have once played or
+  // downloaded), so the detail view can show whether it is already offline.
+  const getAudioBookHash = useCallback(
+    (tracks: OpdsAudioTrackLink[], title: string, author: string) =>
+      opdsAudiobookStubIdentity({
+        catalogId,
+        title,
+        author,
+        tracks: resolveAudioTracks(tracks),
+        bookorbit: settings.bookorbit,
+      }).hash,
+    [catalogId, resolveAudioTracks, settings.bookorbit],
+  );
+
   // Audio entries are played from the catalog, never imported as files (#6224):
   // the stub carries the acquisition links as its identity, the way an ABS
   // stub carries `abs://<serverId>/<itemId>`.
+  const ensureAudioStub = useCallback(
+    async (tracks: OpdsAudioTrackLink[], title: string, author: string): Promise<Book | null> => {
+      if (!appService || !libraryLoaded) return null;
+      const resolved = resolveAudioTracks(tracks);
+      const { library, setLibrary } = useLibraryStore.getState();
+      const { book, created } = await ensureOpdsAudiobookStub({
+        appService,
+        library,
+        catalogId,
+        title,
+        author,
+        tracks: resolved,
+        coverUrl: publicationCoverHref
+          ? resolveURL(publicationCoverHref, state.baseURL)
+          : undefined,
+        catalog: {
+          username: usernameRef.current || '',
+          password: passwordRef.current || '',
+          customHeaders: customHeadersRef.current,
+        },
+        certOwner: certOwnerRef.current,
+        bookorbit: settings.bookorbit,
+      });
+      if (created) {
+        const newLibrary = [book, ...library];
+        setLibrary(newLibrary);
+        await appService.saveLibraryBooks(newLibrary);
+      }
+      return book;
+    },
+    [
+      state.baseURL,
+      catalogId,
+      appService,
+      libraryLoaded,
+      publicationCoverHref,
+      settings.bookorbit,
+      resolveAudioTracks,
+    ],
+  );
+
   const handlePlayAudio = useCallback(
     async (tracks: OpdsAudioTrackLink[], title: string, author: string) => {
-      if (!appService || !libraryLoaded) return;
       try {
-        const resolved = tracks.map((track) => ({
-          ...track,
-          href: resolveURL(track.href, state.baseURL),
-        }));
-        const { library, setLibrary } = useLibraryStore.getState();
-        const { book, created } = await ensureOpdsAudiobookStub({
-          appService,
-          library,
-          catalogId,
-          title,
-          author,
-          tracks: resolved,
-          coverUrl: publicationCoverHref
-            ? resolveURL(publicationCoverHref, state.baseURL)
-            : undefined,
-          catalog: {
-            username: usernameRef.current || '',
-            password: passwordRef.current || '',
-            customHeaders: customHeadersRef.current,
-          },
-          certOwner: certOwnerRef.current,
-          bookorbit: settings.bookorbit,
-        });
-        if (created) {
-          const newLibrary = [book, ...library];
-          setLibrary(newLibrary);
-          await appService.saveLibraryBooks(newLibrary);
-        }
-        router.push(`/player?id=${book.hash}`);
+        const book = await ensureAudioStub(tracks, title, author);
+        if (book) router.push(`/player?id=${book.hash}`);
       } catch (e) {
         console.error('Play error:', e);
         eventDispatcher.dispatch('toast', {
@@ -823,16 +859,26 @@ export default function BrowserPage() {
         });
       }
     },
-    [
-      state.baseURL,
-      catalogId,
-      appService,
-      libraryLoaded,
-      router,
-      publicationCoverHref,
-      settings.bookorbit,
-      _,
-    ],
+    [ensureAudioStub, router, _],
+  );
+
+  // Keep a catalog audiobook on the device without playing it first. Goes
+  // through the same transfer queue (and entitlement gate) as the bookshelf's
+  // "Download for Offline".
+  const handleDownloadAudio = useCallback(
+    async (tracks: OpdsAudioTrackLink[], title: string, author: string) => {
+      try {
+        const book = await ensureAudioStub(tracks, title, author);
+        if (book) handleBookOfflineDownload(book);
+      } catch (e) {
+        console.error('Audio download error:', e);
+        eventDispatcher.dispatch('toast', {
+          type: 'error',
+          message: _('Failed to download') + `:\n${e instanceof Error ? e.message : e}`,
+        });
+      }
+    },
+    [ensureAudioStub, handleBookOfflineDownload, _],
   );
 
   const handleGenerateCachedImageUrl = useCallback(
@@ -1211,6 +1257,8 @@ export default function BrowserPage() {
             onDownload={handleDownload}
             onStream={handleStream}
             onPlayAudio={handlePlayAudio}
+            onDownloadAudio={isTauriAppPlatform() ? handleDownloadAudio : undefined}
+            getAudioBookHash={getAudioBookHash}
             resolveURL={resolveURL}
             onNavigate={handleNavigate}
             onGenerateCachedImageUrl={handleGenerateCachedImageUrl}

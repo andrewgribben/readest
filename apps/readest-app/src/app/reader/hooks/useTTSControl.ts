@@ -1100,6 +1100,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
                   bookHash: bookData.book.hash,
                   listening: candidates.listening,
                   reading: candidates.reading,
+                  ...(candidates.fromServer ? { listeningFromServer: true } : {}),
                 })
               : 'listening';
           if (!selection) {
