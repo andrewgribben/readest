@@ -35,7 +35,6 @@ import {
 } from '@/utils/book';
 import { isFeedBook } from '@/services/rss/feedBookUrl';
 import { saveSysSettings } from '@/helpers/settings';
-import { setCoverWallpaperWithToast } from '@/services/wallpaper/setCoverWallpaperAction';
 import BookCover from '@/components/BookCover';
 import BookCoverViewer, { useBookCoverViewer } from '@/components/BookCoverViewer';
 import Dropdown from '../Dropdown';
@@ -182,7 +181,14 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
             )}
             {appService?.isAndroidApp && (
               <button
-                onClick={() => setCoverWallpaperWithToast(appService, book, _)}
+                onClick={async () => {
+                  // Loaded on demand: the wallpaper service pulls in the library
+                  // and settings stores, which this view otherwise doesn't need.
+                  const { setCoverWallpaperWithToast } = await import(
+                    '@/services/wallpaper/setCoverWallpaperAction'
+                  );
+                  await setCoverWallpaperWithToast(appService, book, _);
+                }}
                 title={_('Set Cover as Wallpaper')}
                 aria-label={_('Set Cover as Wallpaper')}
               >
