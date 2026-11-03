@@ -39,15 +39,16 @@ export interface EnsureOpdsAudiobookStubResult {
 }
 
 /**
- * Ensure the library has an OPDSAUDIO or BOOKORBIT stub for these tracks.
- * Idempotent on identity hash; applies the feed cover when creating a row.
+ * The library identity a catalog audiobook gets, without creating anything:
+ * lets the catalog show whether it is already on the shelf or downloaded.
  */
-export const ensureOpdsAudiobookStub = async (
-  input: EnsureOpdsAudiobookStubInput,
-): Promise<EnsureOpdsAudiobookStubResult> => {
-  const { appService, library, catalogId, title, author, tracks, coverUrl, catalog, bookorbit } =
-    input;
-
+export const opdsAudiobookStubIdentity = (
+  input: Pick<
+    EnsureOpdsAudiobookStubInput,
+    'catalogId' | 'title' | 'author' | 'tracks' | 'bookorbit'
+  >,
+): { hash: string; filePath: string; native: boolean } => {
+  const { catalogId, title, author, tracks, bookorbit } = input;
   const native = matchBookOrbitAudiobook(
     tracks.map((track) => track.href),
     bookorbit ?? { serverUrl: '', password: '' },
@@ -56,6 +57,19 @@ export const ensureOpdsAudiobookStub = async (
     ? makeBookOrbitAudioFilePath(native.bookId)
     : makeOpdsAudioFilePath({ catalogId, title, author, tracks });
   const hash = md5(native ? filePath : opdsAudioIdentity(catalogId, tracks));
+  return { hash, filePath, native: !!native };
+};
+
+/**
+ * Ensure the library has an OPDSAUDIO or BOOKORBIT stub for these tracks.
+ * Idempotent on identity hash; applies the feed cover when creating a row.
+ */
+export const ensureOpdsAudiobookStub = async (
+  input: EnsureOpdsAudiobookStubInput,
+): Promise<EnsureOpdsAudiobookStubResult> => {
+  const { appService, library, title, author, coverUrl, catalog } = input;
+
+  const { hash, filePath, native } = opdsAudiobookStubIdentity(input);
   const existing = library.find((book) => book.hash === hash && !book.deletedAt);
   if (existing) return { book: existing, created: false };
 
