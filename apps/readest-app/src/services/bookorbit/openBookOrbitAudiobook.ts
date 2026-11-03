@@ -17,7 +17,7 @@ import { AudiobookController } from '@/services/audiobook/AudiobookController';
 import type { AudiobookSource } from '@/services/audiobook/AudiobookController';
 import { NativeAudiobookClock } from '@/services/audiobook/NativeAudiobookClock';
 import { isTauriAppPlatform } from '@/services/environment';
-import { loadOpdsOfflineManifest } from '@/services/opds/offline';
+import { loadOpdsOfflineManifest, saveOpdsOfflineManifest } from '@/services/opds/offline';
 import { ttsSessionManager } from '@/services/tts/TTSSessionManager';
 import type { TTSMediaBridgeMeta } from '@/services/tts/ttsMediaBridge';
 import { useLibraryStore } from '@/store/libraryStore';
@@ -25,7 +25,16 @@ import type { ABSTrack } from '@/types/audiobookshelf';
 import type { Book } from '@/types/book';
 import type { AppService } from '@/types/system';
 import { getOSPlatform, uniqueId } from '@/utils/misc';
-import { bookOrbitProgressHooks } from './progressSync';
+import {
+  bookOrbitProgressHooks,
+  isOwnBookOrbitWrite,
+  notifyBookOrbitDiverged,
+} from './progressSync';
+import type { BookOrbitClient, BookOrbitPlaybackState } from './client';
+import type { BookOrbitManifest } from './manifest';
+import { AUDIO_POSITION_CHOICE_THRESHOLD_SEC } from '@/services/audiobook/startPosition';
+import { clampStartPosition, resolveBookOrbitStart } from './startPosition';
+import { withTimeout } from './timeout';
 import { makeAudiobookProgressSaver } from '@/services/audiobook/progressPersistence';
 import { parseBookOrbitAudioFilePath } from './audiobookId';
 import { createBookOrbitClient } from './createClient';
@@ -35,12 +44,57 @@ import {
   manifestAssetIds,
   manifestChapters,
   manifestTracks,
+  matchingAssetIds,
 } from './manifest';
 
 export interface BookOrbitAudiobookSession {
   bookKey: string;
   controller: AudiobookController;
 }
+
+/**
+ * Asks the user which of two positions to resume from. 'server' and 'local'
+ * pick a side; null (dismissed) keeps this device's position.
+ */
+export type ChooseBookOrbitStart = (choice: {
+  bookHash: string;
+  server: number;
+  local: number;
+}) => Promise<'server' | 'local' | null>;
+
+/**
+ * Opening must not wait long on a server it may not reach: an offline copy
+ * plays without it, and the local position is a fine fallback.
+ */
+const SERVER_READ_TIMEOUT_MS = 5_000;
+
+const readServerState = async (
+  client: BookOrbitClient,
+  bookId: number,
+): Promise<BookOrbitPlaybackState | null> => {
+  try {
+    return await withTimeout(
+      (signal) => client.getPlaybackState(bookId, signal),
+      SERVER_READ_TIMEOUT_MS,
+    );
+  } catch {
+    return null;
+  }
+};
+
+const readServerManifest = async (
+  client: BookOrbitClient,
+  bookId: number,
+): Promise<BookOrbitManifest | null> => {
+  try {
+    return await withTimeout(
+      (signal) => client.getManifest(bookId, signal),
+      SERVER_READ_TIMEOUT_MS,
+    );
+  } catch {
+    return null;
+  }
+};
 
 /** Matches the ABS syncer: keep the row live in the store, write to disk rarely. */
 
@@ -91,21 +145,36 @@ const recordDuration = (appService: AppService, bookHash: string, duration: numb
 };
 
 /**
- * Where to resume. The server's position wins when it has one: BookOrbit's own
- * player writes there too, and sharing it is the point of using this API. A
- * book parked at its end replays from the start, the same rule the OPDS path
- * uses -- resuming past the last track ends the session the instant it opens.
+ * A session left running (paused) in the background was set up against the
+ * server position at the time. If another device has moved it since, that
+ * session can neither resume from the new position nor push without
+ * overwriting it, so it is closed and the book reopened from scratch, which
+ * reads the server again and asks.
  */
-const resolveStartAt = (serverPositionSec: number, book: Book, duration: number): number => {
-  const local = book.progress?.[0] ?? 0;
-  const position = serverPositionSec > 0 ? serverPositionSec : local;
-  if (position <= 0) return 0;
-  return duration > 0 && position >= duration - 1 ? 0 : position;
+const liveSessionIsStale = async (
+  controller: AudiobookController,
+  bookId: number,
+  tracks: ABSTrack[] | null,
+  assetIds: string[] | null,
+): Promise<boolean> => {
+  if (controller.state === 'playing' || !tracks || !assetIds?.length) return false;
+  const client = createBookOrbitClient();
+  if (!client) return false;
+  const state = await readServerState(client, bookId);
+  if (!state?.assetId || isOwnBookOrbitWrite(bookId, state)) return false;
+  const server = globalFromAssetPosition(tracks, assetIds, state.assetId, state.positionMs ?? 0);
+  const current = controller.getPlaybackInfo()?.position;
+  if (server === null || current === undefined) return false;
+  return Math.abs(server - current) > AUDIO_POSITION_CHOICE_THRESHOLD_SEC;
 };
+
+const liveSessions = new Map<string, { tracks: ABSTrack[]; assetIds: string[] }>();
 
 export const openBookOrbitAudiobookSession = async (input: {
   appService: AppService;
   book: Book;
+  /** Without it a disagreement keeps this device's position. */
+  chooseStart?: ChooseBookOrbitStart;
 }): Promise<BookOrbitAudiobookSession | null> => {
   const { appService } = input;
   let { book } = input;
@@ -124,7 +193,21 @@ export const openBookOrbitAudiobookSession = async (input: {
 
   const existing = ttsSessionManager.getSessionByHash(book.hash);
   if (existing && existing.controller.kind === 'audiobook' && !existing.controller.terminated) {
-    return { bookKey: existing.bookKey, controller: existing.controller as AudiobookController };
+    const controller = existing.controller as AudiobookController;
+    const timeline = liveSessions.get(existing.bookKey);
+    if (
+      !(await liveSessionIsStale(
+        controller,
+        bookId,
+        timeline?.tracks ?? null,
+        timeline?.assetIds ?? null,
+      ))
+    ) {
+      return { bookKey: existing.bookKey, controller };
+    }
+    liveSessions.delete(existing.bookKey);
+    await ttsSessionManager.stopBook(book.hash, 'user');
+    book = useLibraryStore.getState().getBookByHash(book.hash) ?? book;
   }
 
   const client = createBookOrbitClient();
@@ -157,6 +240,25 @@ export const openBookOrbitAudiobookSession = async (input: {
     author = book.author;
     totalDuration = offline.duration;
     ({ clock, resolveUrl } = offlineLocalClock(appService, tracks));
+    if (offline.assetIds?.length === tracks.length) {
+      assetIds = offline.assetIds;
+      manifestRevision = offline.manifestRevision ?? '';
+    } else if (client) {
+      // Downloaded before asset ids were recorded: without them the book can
+      // neither read nor share its position. Borrow them from the server only
+      // if its files still line up with the ones on disk.
+      const manifest = await readServerManifest(client, bookId);
+      const matched = manifest ? matchingAssetIds(manifest, offline.tracks) : null;
+      if (manifest && matched) {
+        assetIds = matched;
+        manifestRevision = manifest.revision;
+        void saveOpdsOfflineManifest(appService, book.hash, {
+          ...offline,
+          assetIds,
+          manifestRevision,
+        }).catch(console.warn);
+      }
+    }
   } else {
     const manifest = await client!.getManifest(bookId);
     tracks = manifestTracks(manifest);
@@ -186,21 +288,37 @@ export const openBookOrbitAudiobookSession = async (input: {
 
   // Best effort: a server without a stored position, or an unreachable one,
   // just means we fall back to the local progress.
-  let serverPositionSec = 0;
+  let serverPositionSec: number | null = null;
   let baseRevision = 0;
   if (client && assetIds.length > 0) {
-    try {
-      const state = await client.getPlaybackState(bookId);
-      if (state?.assetId) {
-        // The stored position is an offset *within one asset*, not into the
-        // book, so it has to be placed on the timeline before it means anything.
-        serverPositionSec =
-          globalFromAssetPosition(tracks, assetIds, state.assetId, state.positionMs ?? 0) ?? 0;
-      }
-      baseRevision = state?.revision ?? 0;
-    } catch {
-      serverPositionSec = 0;
+    const state = await readServerState(client, bookId);
+    if (state?.assetId) {
+      // The stored position is an offset *within one asset*, not into the
+      // book, so it has to be placed on the timeline before it means anything.
+      serverPositionSec = globalFromAssetPosition(
+        tracks,
+        assetIds,
+        state.assetId,
+        state.positionMs ?? 0,
+      );
     }
+    baseRevision = state?.revision ?? 0;
+  }
+
+  const localPositionSec = book.progress?.[0] ?? 0;
+  const start = resolveBookOrbitStart({
+    server: serverPositionSec,
+    local: localPositionSec,
+    duration: totalDuration,
+  });
+  let startAt: number;
+  if (start.kind === 'resolved') {
+    startAt = start.position;
+  } else {
+    const choice = input.chooseStart
+      ? await input.chooseStart({ bookHash: book.hash, server: start.server, local: start.local })
+      : null;
+    startAt = clampStartPosition(choice === 'server' ? start.server : start.local, totalDuration);
   }
 
   recordDuration(appService, book.hash, totalDuration);
@@ -213,7 +331,7 @@ export const openBookOrbitAudiobookSession = async (input: {
     tracks,
     chapters,
     resolveUrl,
-    startAt: resolveStartAt(serverPositionSec, book, totalDuration),
+    startAt,
   };
 
   const controller = new AudiobookController(
@@ -228,6 +346,7 @@ export const openBookOrbitAudiobookSession = async (input: {
           manifestRevision,
           baseRevision,
           saveProgress,
+          { onDiverged: notifyBookOrbitDiverged },
         )
       : {
           onTick: (position) => saveProgress(position, false),
@@ -248,6 +367,7 @@ export const openBookOrbitAudiobookSession = async (input: {
     getSectionLabel: () => controller.getCurrentChapter()?.title,
   };
   ttsSessionManager.claim(bookKey, controller, meta);
+  if (assetIds.length > 0) liveSessions.set(bookKey, { tracks, assetIds });
 
   return { bookKey, controller };
 };

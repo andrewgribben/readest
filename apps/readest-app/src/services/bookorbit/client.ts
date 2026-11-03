@@ -77,6 +77,8 @@ interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   headers?: Record<string, string>;
   body?: string;
+  /** Aborts the request; a hung write must not hold up the ones after it. */
+  signal?: AbortSignal;
 }
 
 const boFetch = (
@@ -92,6 +94,7 @@ const boFetch = (
       method: init.method ?? 'GET',
       headers: withOriginSuppressed(init.headers ?? {}),
       body: init.body,
+      ...(init.signal ? { signal: init.signal } : {}),
     },
     allowSelfSignedCert,
   );
@@ -209,8 +212,11 @@ export class BookOrbitClient {
     this.#onTokensUpdated({ accessToken });
   }
 
-  async getManifest(bookId: number): Promise<BookOrbitManifest> {
-    const manifest = await this.#request<unknown>(`/api/v1/audiobooks/${bookId}/manifest`);
+  async getManifest(bookId: number, signal?: AbortSignal): Promise<BookOrbitManifest> {
+    const manifest = await this.#request<unknown>(
+      `/api/v1/audiobooks/${bookId}/manifest`,
+      signal ? { signal } : {},
+    );
     if (!isSupportedManifest(manifest)) {
       const m = manifest as { schema?: unknown; schemaVersion?: unknown } | null;
       throw new UnsupportedManifestError(m?.schema, m?.schemaVersion);
@@ -218,15 +224,23 @@ export class BookOrbitClient {
     return manifest;
   }
 
-  getPlaybackState(bookId: number): Promise<BookOrbitPlaybackState> {
-    return this.#request<BookOrbitPlaybackState>(`/api/v1/audiobooks/${bookId}/playback-state`);
+  getPlaybackState(bookId: number, signal?: AbortSignal): Promise<BookOrbitPlaybackState> {
+    return this.#request<BookOrbitPlaybackState>(
+      `/api/v1/audiobooks/${bookId}/playback-state`,
+      signal ? { signal } : {},
+    );
   }
 
-  putPlaybackState(bookId: number, state: BookOrbitPlaybackStateWrite): Promise<unknown> {
+  putPlaybackState(
+    bookId: number,
+    state: BookOrbitPlaybackStateWrite,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     return this.#request(`/api/v1/audiobooks/${bookId}/playback-state`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(state),
+      ...(signal ? { signal } : {}),
     });
   }
 
